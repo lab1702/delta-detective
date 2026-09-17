@@ -106,6 +106,8 @@ def investigate(config, out, overwrite=False):
         if cfg['compare_fields']:
             replay.append('SELECT * FROM main.field_overview;')
             replay.extend(f'SELECT * FROM main.field_{i};' for i in range(len(cfg['compare_fields'])))
+            replay.extend(f'SELECT * FROM main.field_{i}_transitions_display ORDER BY rank;'
+                          for i, name in enumerate(cfg['compare_fields']) if name in cfg.get('field_transitions', []))
         for item in results:
             ns = item["sql_schema"]
             replay.append(f"SELECT * FROM {ns}.reconciliation;")

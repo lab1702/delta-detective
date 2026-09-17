@@ -43,7 +43,7 @@ def load_config(path):
         cfg = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise InvestigationError(f"Cannot read configuration: {exc}") from exc
-    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema", "compare_fields", "csv", "column_mapping", "filters", "field_tolerances"],
+    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema", "compare_fields", "csv", "column_mapping", "filters", "field_tolerances", "field_transitions"],
            ["mode", "reference", "current", "key"], "configuration")
     if cfg["mode"] != "snapshots":
         raise InvestigationError("Only mode: snapshots is supported")
@@ -69,6 +69,9 @@ def load_config(path):
     names(cfg["key"], "key", True)
     cfg.setdefault('compare_fields', [])
     names(cfg['compare_fields'], 'compare_fields')
+    names(cfg.get('field_transitions', []), 'field_transitions')
+    if set(cfg.get('field_transitions', [])) - set(cfg['compare_fields']):
+        raise InvestigationError('field_transitions must name configured compare_fields columns')
     validate_field_tolerances(cfg)
     if set(cfg['key']) & set(cfg['compare_fields']):
         raise InvestigationError('Key columns cannot be compare_fields')

@@ -42,5 +42,29 @@ def compare_fields(con, cfg, profiles, execute):
         results.append(dict(name=name, type=typ, matched_rows=matched, **counts,
                             percent_changed=percent, evidence=table,
                             absolute_tolerance=cfg.get('field_tolerances', {}).get(name, {}).get('absolute')))
+        if name in cfg.get('field_transitions', []):
+            results[-1]['transitions'] = field_transitions(con, execute, i, counts['changed_rows'])
     return dict(status='passed', matched_rows=matched, changed_rows=any_changed,
                 unchanged_rows=matched-any_changed, fields=results, evidence='main.field_overview')
+
+
+def field_transitions(con, execute, index, expected_rows):
+    """Return at most 50 transitions plus Other; keep all grouping inside DuckDB."""
+    table = f'main.field_{index}_transitions'
+    execute(f'''CREATE TABLE {table} AS SELECT rf{index} AS from_value, cf{index} AS to_value,
+      count(*) AS rows FROM main.joined
+      WHERE rp AND cp AND rf{index} IS DISTINCT FROM cf{index} GROUP BY 1, 2''')
+    execute(f'''CREATE TABLE {table}_ranked AS SELECT *, row_number() OVER (
+      ORDER BY rows DESC, from_value NULLS FIRST, to_value NULLS FIRST) AS rank FROM {table}''')
+    execute(f'''CREATE TABLE {table}_display AS
+      SELECT *, false AS is_other FROM {table}_ranked WHERE rank <= 50
+      UNION ALL SELECT NULL, NULL, sum(rows)::BIGINT, 51, true
+      FROM {table}_ranked WHERE rank > 50 HAVING count(*) > 0''')
+    cursor = con.execute(f'SELECT * FROM {table}_display ORDER BY rank')
+    rows = [dict(zip([c[0] for c in cursor.description], row)) for row in cursor.fetchall()]
+    if sum(row['rows'] for row in rows) != expected_rows:
+        raise InvestigationError('Field transition row-count identity failed')
+    pairs = con.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
+    return dict(status='passed', rows=rows, changed_rows=expected_rows, distinct_transitions=pairs,
+                omitted_transitions=max(0, pairs-50), evidence=table + '_display',
+                ranking='Changed row count descending, then source and destination values (nulls first); top 50 plus Other.')

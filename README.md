@@ -105,6 +105,9 @@ The expanded menus let you:
 - Optionally set absolute tolerances for selected numeric comparison fields.
   Enter skips tolerances and preserves exact comparison. Invalid or negative
   bounds prompt for another value; decimal text is preserved exactly.
+- Opt in to transition summaries for selected text/boolean comparison fields.
+  The wizard explains that these expose source/destination field values in the
+  report and JSON; Enter leaves them disabled.
 - Enable full or focused raw exports and set positive row limits for focused
   selections. Enter leaves all exports disabled. Full exports include all rows.
 - Choose an overall metric, a configured dimension/group, or a compared field as
@@ -423,6 +426,44 @@ or change exit codes by themselves; use field rules below to enforce limits.
 
 Select comparison fields through the expanded `init` options or directly in YAML.
 Only the current run's two snapshots are needed.
+
+### Field transition summaries
+
+Opt in to value-level transition counts for selected text or boolean comparison
+fields to see which changes occur most often:
+
+```yaml
+compare_fields: [status, active]
+field_transitions: [status, active]
+```
+
+Every listed field must also be in `compare_fields` and have a matching VARCHAR
+or BOOLEAN type in both snapshots. Use mapped column names. Filters apply before
+transition counting. Only changed **matched records** contribute; unchanged,
+added, and removed records are excluded. Transitions are independent of metric
+changes, so a status change with an unchanged amount still appears.
+
+Each field shows the top 50 source/destination pairs by record count, with ties
+ordered by source then destination value (nulls first). Additional pairs are
+combined into an explicit **Other** row. Counts, including Other, must reconcile
+exactly to the field's changed-record count. The JSON `is_other` flag distinguishes
+the remainder from actual nulls or text named Other. HTML labels distinguish null
+from empty text (`Value: ""`), text such as `"NULL"`, and boolean values.
+
+**This option exposes field values in the report and JSON**, even when raw exports
+are disabled. It does not expose record keys or enable CSV exports. Unlisted fields
+retain count-only summaries unless separately selected as dimensions or exports.
+The wizard offers this choice after selecting comparison fields; leave it blank
+to keep transition summaries disabled.
+
+Enabled fields include a `transitions` object in `field_changes.fields` in
+findings and manifest JSON, with bounded rows, changed-record totals, distinct and
+omitted pair counts, and a SQL evidence reference. All grouping stays in DuckDB;
+Python receives at most 51 rows per enabled field. Replay SQL provides
+`main.field_N_transitions_display` in rank order, where N is the field's index in
+`compare_fields`. Empty or unchanged populations show no transitions. Schema-only
+runs do not compute field comparisons or transitions. Each run remains standalone
+and DuckDB resource defaults remain unchanged.
 
 ### Numeric field tolerances
 

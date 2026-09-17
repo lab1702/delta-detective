@@ -98,6 +98,10 @@ def load_and_validate(con, cfg, execute):
 
 
 def validate_loaded(con, cfg, profiles, execute):
+    for name in cfg.get('field_transitions', []):
+        for side in profiles:
+            if profiles[side]['schema'].get(name) not in ('VARCHAR', 'BOOLEAN'):
+                raise InvestigationError(f'Field transitions require a text or boolean comparison field: {name!r}')
     for name in cfg.get('field_tolerances', {}):
         for side in profiles:
             if not numeric_type(profiles[side]['schema'].get(name, '')):

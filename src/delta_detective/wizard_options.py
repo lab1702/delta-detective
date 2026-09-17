@@ -89,6 +89,12 @@ def advanced_options(con, schemas, common, key, ask, tell, choose):
                     break
         if tolerances:
             options['field_tolerances'] = tolerances
+    transition_fields = [c for c in compared if common[c] in ('VARCHAR', 'BOOLEAN')]
+    if transition_fields:
+        tell('Field transition summaries expose source and destination values in the report and JSON. They show top 50 changes plus Other; leave blank to disable.')
+        selected = choose('Transition summary field numbers (Enter for none): ', [repr(c) for c in transition_fields], ask, tell)
+        if selected:
+            options['field_transitions'] = [transition_fields[i] for i in selected]
     tell('Raw exports contain record keys and selected before/after values. Leave export selections blank to keep them disabled.')
     kinds = ['all', 'added', 'removed', 'changed', 'moved', 'largest_changes'] + (['field_changed'] if compared else [])
     selected = choose('Raw export numbers (Enter for none): ', kinds, ask, tell)
