@@ -39,12 +39,7 @@ def value_sql(value, typ, column):
     raise InvestigationError(error)
 
 
-def apply_filters(con, cfg, profiles, execute):
-    filters = cfg.get('filters', [])
-    scope = dict(status='applied' if filters else 'not_configured', filters=filters, inputs={},
-                 note=SCOPE_NOTE if filters else 'Full snapshots compared.')
-    if not filters:
-        return scope
+def filter_predicate(filters, profiles):
     predicates = []
     for item in filters:
         column, op = item['column'], item['operator']
@@ -65,7 +60,16 @@ def apply_filters(con, cfg, profiles, execute):
             predicates.append(f'{col} IN ({", ".join(rendered)})')
         else:
             predicates.append(f'{col} {BOUNDS.get(op, "=")} {rendered[0]}')
-    predicate = ' AND '.join(f'({p})' for p in predicates)
+    return ' AND '.join(f'({p})' for p in predicates) or 'true'
+
+
+def apply_filters(con, cfg, profiles, execute):
+    filters = cfg.get('filters', [])
+    scope = dict(status='applied' if filters else 'not_configured', filters=filters, inputs={},
+                 note=SCOPE_NOTE if filters else 'Full snapshots compared.')
+    if not filters:
+        return scope
+    predicate = filter_predicate(filters, profiles)
     for side in ('reference', 'current'):
         table = f'{side}_filter_scope'
         execute(f'CREATE TABLE {table} AS SELECT count(*) AS total_rows, '

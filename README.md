@@ -65,7 +65,28 @@ delta-detective init reference.parquet current.parquet
 delta-detective init reference.csv current.csv --out comparisons/orders.yaml
 ```
 
-The wizard displays column names and types from both snapshots, then offers
+The wizard first asks **Configure input parsing, column mappings, or filters?**
+Enter skips these optional steps. Answer yes to:
+
+- Set CSV parsing options separately for each CSV input **before loading**. Choose
+  an option number, then enter a source column name and DuckDB type, a header
+  boolean (`true`/`false`), or a JSON string for delimiter, quote, escape, null
+  marker, and date/time formats. For example, enter `";"`, `""`, or `"\\t"`.
+  Unspecified settings retain automatic inference and existing defaults.
+- Select columns to rename in each loaded snapshot and enter their logical names.
+  Mappings are simultaneous; collisions prompt you to re-enter that side's
+  mapping. Later menus use the mapped names.
+- Add shared filters using numbered column/operator menus and JSON values. Use
+  quoted ISO dates and exact decimals; membership takes a JSON list. Null checks
+  need no value. Each added condition previews the combined AND filter's included,
+  excluded, and total counts for both inputs, without showing source row values.
+
+The chosen filters determine the rows used for key candidates, available sum
+metrics, field comparisons, and validation during setup. An empty subset is
+reported explicitly. Enter finishes each optional menu; EOF or Ctrl+C cancels
+without writing a configuration. Parsing errors abort safely without saving.
+
+The wizard then displays column names and types from both snapshots and offers
 numbered menus for key columns, count/sum metrics, dimensions, and combined
 dimension groups. Enter comma-separated numbers for multiple selections. Choose
 metric names and optionally add threshold rules with inclusive minimum/maximum
@@ -90,14 +111,14 @@ The expanded menus let you:
 - Enable supporting-record exports for individual failed rules, with a limit
   defaulting to 100. Export choices are explicit and default to no.
 
-Candidate single-column keys are checked for uniqueness and nulls in both complete
+Candidate single-column keys are checked for uniqueness and nulls in both selected
 snapshots. You must select the logical key yourself: uniqueness does not establish
 record identity. You can select a composite key even when its individual columns
 are not unique; the selected tuple is checked before continuing. Empty snapshots
 provide no evidence for identity. Only columns with matching supported types are
 selectable, and sum choices exclude null/nonfinite columns. No raw row values are
 displayed. CSV inference has the same limitations described below, including
-numeric-looking identifiers; use typed Parquet to preserve those identifiers.
+numeric-looking identifiers; use CSV type overrides or typed Parquet to preserve those identifiers.
 
 The wizard uses the investigation loader and runs validation and reconciliation
 for every selected metric and breakdown before saving when the schema contract
@@ -169,8 +190,9 @@ It happens before schema validation; incompatible types still fail validation.
 The manifest records each input's `source_schema`, `column_mapping`, and mapped
 `schema`, and replay SQL includes the explicit column aliases. Inputs are never
 modified. Each run is standalone and DuckDB resource settings remain unchanged.
-Add mappings directly to the YAML configuration; the init wizard inspects the
-original source names.
+Add mappings directly to YAML or use the init wizard's optional input setup.
+The wizard inspects source names before mapping, then offers logical names in
+the remaining menus.
 
 ### Filtered comparisons
 
@@ -220,7 +242,7 @@ shows this scope and each input's total, included, and excluded row counts.
 and scope explanation. Replay SQL applies the same predicates and retains count
 tables named `reference_filter_scope` and `current_filter_scope`. Schema-blocked
 runs mark filters as `not_evaluated`. Each run is standalone. Add filters directly
-to YAML; the init wizard continues to inspect full snapshots.
+to YAML or use the init wizard's optional input setup to preview population counts.
 
 ### Schema contracts
 
@@ -753,8 +775,8 @@ of the resulting loaded types.
 The manifest records the requested overrides and effective parsing settings;
 replay SQL uses those effective settings. Strict row validation remains enabled.
 DuckDB's memory, thread, and other resource settings remain unchanged. The init
-wizard uses automatic CSV inference; add overrides to the YAML configuration
-before running `investigate` when needed.
+wizard defaults to automatic CSV inference; its optional input setup accepts
+overrides before loading. Overrides can also be added directly to YAML.
 
 ## Interpretation and arithmetic
 

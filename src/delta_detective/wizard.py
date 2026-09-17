@@ -12,6 +12,7 @@ from .config import InvestigationError, RULE_MEASURES, load_config, local_input,
 from .loading import fingerprint, ident, load_snapshots, validate_loaded
 from .wizard_options import advanced_options, advanced_rule, yes_no, positive_limit
 from .schema import check_schema
+from .wizard_inputs import csv_options, map_columns, scoped_filters
 
 
 def choose(prompt, options, ask, tell, *, minimum=0, maximum=None):
@@ -50,8 +51,13 @@ def init_config(reference, current, out='comparison.yaml', *, ask=None, tell=pri
     try:
         with duckdb.connect() as con:
             before = {s: fingerprint(p) for s, p in paths.items()}
+            prepare = yes_no('Configure input parsing, column mappings, or filters? [y/N]: ', ask, tell)
+            input_options = csv_options(paths, ask, tell, choose) if prepare else {}
             tell("Inspecting both complete snapshots. No source row values will be displayed.")
-            profiles = load_snapshots(con, paths, con.execute)
+            profiles = load_snapshots(con, {**paths, **input_options}, con.execute)
+            if prepare:
+                input_options.update(map_columns(con, profiles, ask, tell, choose))
+                input_options.update(scoped_filters(con, profiles, ask, tell, choose))
             schemas = [profiles[s]['schema'] for s in ('reference', 'current')]
             common = {c: t for c, t in schemas[0].items() if schemas[1].get(c) == t}
             tell("Columns (reference / current types):")
@@ -62,7 +68,7 @@ def init_config(reference, current, out='comparison.yaml', *, ask=None, tell=pri
             if not keys:
                 raise InvestigationError("No compatible exact scalar columns available for keys")
             candidates = {c: key_valid(con, [c]) for c in keys}
-            tell("Key candidates: unique/non-null checks cover both files, but do not establish identity.")
+            tell("Key candidates: unique/non-null checks cover the selected rows in both files, but do not establish identity.")
             tell("Select the columns that identify the same logical record in both snapshots. Empty snapshots provide no identity evidence.")
             while True:
                 selected = choose("Key column numbers (required; comma-separated for composite key): ",
@@ -141,6 +147,7 @@ def init_config(reference, current, out='comparison.yaml', *, ask=None, tell=pri
             cfg = dict(mode='snapshots', **paths, key=key, metrics=metrics, dimensions=dimensions,
                        dimension_groups=groups, rules=rules, report={'include_raw_rows': False})
             cfg.update(options)
+            cfg.update(input_options)
             # Validate the exact saved configuration and run arithmetic checks against
             # the already loaded snapshots. Only publish once every metric passes.
             with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.yaml',
