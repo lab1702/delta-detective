@@ -55,6 +55,56 @@ In a restricted workspace where the OS temporary directory is inaccessible, run
 `python -m pytest -q --basetemp .test-tmp-local` with a fresh dedicated test directory.
 Pytest owns and may remove that directory.
 
+## Validate inputs before comparing
+
+Run standalone diagnostics with the same investigation configuration:
+
+```sh
+delta-detective validate comparison.yaml --out validation
+# Explicitly export offending records, at most 100 per failed row check:
+delta-detective validate comparison.yaml --out validation --overwrite --export-invalid-rows --limit 100
+```
+
+The command writes `report.html`, `validation.json`, `manifest.json`, and
+`analysis.sql`. It reports missing/incompatible selected columns, unsupported
+types, schema contract violations, null-key rows, duplicate-key groups and
+affected rows, null/nonfinite sum values, and nonfinite numeric comparison values.
+Field tolerances, transition types, and field-rule applicability are also checked.
+Duplicate counts include every row in each repeated composite-key group; excess
+rows count the duplicates beyond one row per group. Null-key groups can contribute
+to both null and duplicate diagnostics. Counts overlap and must not be added.
+
+CSV parsing overrides and column mappings apply first. Schema contracts are
+checked before filtering; a failed contract produces diagnostics with row checks
+and filters marked as not evaluated. Valid shared filters determine the rows
+checked, with included/excluded counts for each side. Invalid filters are reported
+without checking an unintended population. Checks that require missing or
+unsupported columns cannot be performed; the column problems are reported.
+
+The default output contains column names, types, and counts, not offending source
+values. Investigation export and transition-summary settings do not enable
+validation exports. `--export-invalid-rows` explicitly enables separate CSV files
+for failed row checks, containing keys and the offending selected columns only.
+Each file records its total qualifying count, limit, and truncation status.
+The same record can appear in several exports. SQL replay recreates checks and
+evidence-selection views but does not write CSV files.
+
+Exit codes are **0** for passed input validation, **4** for a completed report with
+input violations, and **2** for configuration, loading, or execution errors.
+Malformed/unreadable files and invalid parsing/mapping settings may prevent a
+diagnostic bundle from being created. Such errors preserve any previous output;
+error messages do not echo offending source rows.
+
+Validation does not run joins, metric reconciliation, transition summaries, or
+threshold evaluation. A passing result confirms input checks, not that later
+arithmetic cannot overflow or that thresholds will pass. It still reads complete
+inputs and can take time on large files. Inputs must remain stable during the run.
+
+Use a separate output directory. `--overwrite` can replace an existing validation
+bundle, but the command refuses to replace an investigation bundle or an unrelated
+nonempty directory. Each validation run stands alone and uses DuckDB's resource
+defaults. Python callers can use `delta_detective.validation.validate(...)`.
+
 ## Configuration
 
 To create a configuration interactively:

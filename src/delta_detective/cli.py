@@ -4,6 +4,7 @@ from .config import InvestigationError
 from .core import investigate
 from .demo import demo
 from .wizard import init_config
+from .validation import validate
 
 
 def main(argv=None):
@@ -13,6 +14,12 @@ def main(argv=None):
     init.add_argument("reference")
     init.add_argument("current")
     init.add_argument("--out", default="comparison.yaml", help="New YAML file (default: comparison.yaml).")
+    validation = commands.add_parser('validate', help='Diagnose input problems without running a comparison.')
+    validation.add_argument('config')
+    validation.add_argument('--out', required=True)
+    validation.add_argument('--overwrite', action='store_true', help='Replace an existing validation bundle only.')
+    validation.add_argument('--export-invalid-rows', action='store_true', help='Export keys and offending selected fields for failed row checks.')
+    validation.add_argument('--limit', type=int, default=100, help='Maximum exported rows per failed check (default: 100).')
     for name in ("demo", "investigate"):
         sub = commands.add_parser(name)
         if name == "investigate":
@@ -27,6 +34,14 @@ def main(argv=None):
             init_config(args.reference, args.current, args.out)
         elif args.command == "demo":
             print(f"Demo configuration: {demo(args.out, args.overwrite)}")
+        elif args.command == 'validate':
+            data = validate(args.config, args.out, args.overwrite, args.export_invalid_rows, args.limit)
+            print(f"Input validation: {data['status']}")
+            for check in data['checks']:
+                if check['status'] == 'failed':
+                    print(f"{check['side']}: {check['check']} ({', '.join(check['columns'])}): {check['details']}")
+            print(f'Validation report: {args.out}/report.html')
+            return 4 if data['status'] == 'failed' else 0
         else:
             data = investigate(args.config, args.out, args.overwrite)
             print(f"Schema contract: {data['schema_checks']['status']}")
