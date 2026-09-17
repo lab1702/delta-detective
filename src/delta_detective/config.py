@@ -1,6 +1,7 @@
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
 import yaml
+import duckdb
 
 
 class InvestigationError(ValueError):
@@ -42,10 +43,29 @@ def load_config(path):
         cfg = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise InvestigationError(f"Cannot read configuration: {exc}") from exc
-    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules"],
+    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema"],
            ["mode", "reference", "current", "key"], "configuration")
     if cfg["mode"] != "snapshots":
         raise InvestigationError("Only mode: snapshots is supported")
+    if 'schema' in cfg:
+        contract = cfg['schema']
+        fields(contract, ['columns', 'allow_extra_columns'], ['columns'], 'schema contract')
+        if not isinstance(contract['columns'], dict) or not contract['columns']:
+            raise InvestigationError('schema.columns must be a nonempty mapping of required columns to types or null')
+        contract.setdefault('allow_extra_columns', True)
+        if type(contract['allow_extra_columns']) is not bool:
+            raise InvestigationError('schema.allow_extra_columns must be boolean')
+        for column, typ in contract['columns'].items():
+            if not isinstance(column, str) or not column:
+                raise InvestigationError('Schema column names must be nonempty strings')
+            if typ is None:
+                continue
+            if not isinstance(typ, str) or not typ.strip():
+                raise InvestigationError('Schema types must be DuckDB type strings or null')
+            try:
+                contract['columns'][column] = str(duckdb.sqltype(typ))
+            except (duckdb.Error, ValueError):
+                raise InvestigationError(f'Invalid schema type for column {column!r}') from None
     names(cfg["key"], "key", True)
     cfg.setdefault("dimensions", [])
     names(cfg["dimensions"], "dimensions")

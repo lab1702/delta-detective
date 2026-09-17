@@ -29,6 +29,13 @@ def main(argv=None):
             print(f"Demo configuration: {demo(args.out, args.overwrite)}")
         else:
             data = investigate(args.config, args.out, args.overwrite)
+            print(f"Schema contract: {data['schema_checks']['status']}")
+            if data['schema_checks']['status'] == 'failed':
+                for check in data['schema_checks']['results']:
+                    if check['status'] == 'failed':
+                        print(f"{check['side']}.{check['column']}: {check['issue']}; expected={check['expected_type']}, observed={check['observed_type']}")
+                print(f"Comparison not run. Report: {args.out}/report.html")
+                return 4
             for item in data["metrics"]:
                 result = item["summary"]
                 print(f"Metric: {item['metric']['name']}")

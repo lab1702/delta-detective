@@ -4,11 +4,12 @@ import tempfile
 from datetime import datetime, timezone
 import duckdb
 from .config import load_config, InvestigationError, configured_metrics, selected_dimensions
-from .loading import load_and_validate, fingerprint, literal
+from .loading import load_snapshots, validate_loaded, fingerprint, literal
 from .comparison import compare
 from .findings import build_findings, dumps, LIMITATIONS
 from .report import render
 from .rules import evaluate_rules
+from .schema import check_schema
 
 
 def prepare_output(out, overwrite, inputs=()):
@@ -39,7 +40,14 @@ def investigate(config, out, overwrite=False):
         statements.append(sql + ";")
     try:
         before = {s: fingerprint(cfg[s]) for s in ("reference", "current")}
-        profiles = load_and_validate(con, cfg, execute)
+        profiles = load_snapshots(con, cfg, execute)
+        schema_checks = check_schema(cfg.get('schema'), profiles)
+        if schema_checks['status'] == 'failed':
+            for side in profiles:
+                if before[side] != profiles[side]['sha256'] or fingerprint(cfg[side]) != before[side]:
+                    raise InvestigationError('Input changed during analysis; rerun with stable snapshots')
+            return publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements)
+        validate_loaded(con, cfg, profiles, execute)
         a, b = (profiles[s]["schema"] for s in ("reference", "current"))
         schema_changes = [{"column": c, "reference_type": a.get(c), "current_type": b.get(c)} for c in sorted(a.keys() | b.keys()) if a.get(c) != b.get(c)]
         results = []
@@ -78,6 +86,8 @@ def investigate(config, out, overwrite=False):
         data = dict(results[0])  # Legacy top-level fields refer to the first metric.
         data["metrics"] = results
         data["evidence_exports"] = evidence
+        data['schema_checks'] = schema_checks
+        data['execution_status'] = 'success'
         data["rule_checks"] = evaluate_rules(cfg["rules"], results, con, cfg, execute)
         summary = data["summary"]
         replay = []
@@ -93,6 +103,7 @@ def investigate(config, out, overwrite=False):
                     "inputs": profiles, "execution_status": "success", "reconciliation": {k: summary[k] for k in ("status", "exact", "residual", "tolerance")},
                     "validation": checks, "assumptions_and_limitations": LIMITATIONS,
                     "rule_checks": data["rule_checks"],
+                    "schema_checks": schema_checks,
                     "metric_reconciliations": [{"name": item["metric"]["name"], "sql_schema": item["sql_schema"],
                         **{k: item["summary"][k] for k in ("status", "exact", "residual", "tolerance")}} for item in results],
                     "raw_evidence": {"included": bool(evidence), "exports": evidence, "selected_dimensions": selected_dimensions(cfg),
@@ -133,6 +144,27 @@ def publish(stage, out):
     if backup is not None:
         # Publication succeeded. A locked backup must not turn success into failure.
         shutil.rmtree(backup, ignore_errors=True)
+
+
+def publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements):
+    checks = ['Schema contract failed. Comparison, threshold rules, and raw exports were not run.']
+    data = dict(execution_status='schema_contract_failed', schema_checks=schema_checks,
+                metrics=[], summary=None, findings=[], dimensions=[], reclassifications=[],
+                evidence_exports=[], rule_checks={'status': 'not_evaluated', 'results': []},
+                validation=checks, limitations=LIMITATIONS)
+    sql = '-- Schema-only run. Replay loads snapshots; Python evaluates the schema contract.\n' + '\n\n'.join(
+        statements + ['DESCRIBE main.reference;', 'DESCRIBE main.current;'])
+    manifest = dict(application_version='0.1.0', duckdb_version=duckdb.__version__,
+                    created_utc=datetime.now(timezone.utc).isoformat(), configuration=cfg,
+                    inputs=profiles, execution_status=data['execution_status'], schema_checks=schema_checks,
+                    reconciliation=None, metric_reconciliations=[], rule_checks=data['rule_checks'],
+                    validation=checks, raw_evidence={'included': False, 'exports': []},
+                    assumptions_and_limitations=LIMITATIONS)
+    for filename, content in [('findings.json', dumps(data)), ('manifest.json', dumps(manifest)),
+                              ('analysis.sql', sql), ('report.html', render(cfg, data, checks, sql, dumps(profiles)))]:
+        (stage / filename).write_text(content, encoding='utf-8')
+    publish(stage, out)
+    return data
 
 
 def export_evidence(con, execute, cfg, stage, metric_index, metric_count):

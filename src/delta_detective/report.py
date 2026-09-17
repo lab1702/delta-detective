@@ -5,6 +5,9 @@ TEMPLATE = """<!doctype html><html lang="en"><meta charset="utf-8">
 <style>body{font:16px/1.55 system-ui,sans-serif;color:#172b37;max-width:1100px;margin:40px auto;padding:0 24px;background:#fafbfc}h1,h2{line-height:1.2}table{border-collapse:collapse;width:100%;margin:18px 0;background:white}th,td{padding:9px 12px;border-bottom:1px solid #dce3e8;text-align:left;overflow-wrap:anywhere}th{background:#edf2f5}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}small{color:#456}section{margin:34px 0}.badge{padding:8px;background:#e5f2ed}details{margin:15px 0}</style>
 <h1>Delta detective</h1>
 {% set bundle = data %}
+<section><h2>Schema contract: {{ bundle.schema_checks.status }}</h2>
+{% if bundle.schema_checks.status == 'failed' %}<p>Comparison not run: a schema contract was violated. Metric reconciliation, threshold rules, and raw exports were not evaluated.</p>{% endif %}
+{% if bundle.schema_checks.results %}<table><tr><th>Input</th><th>Column</th><th>Expected type</th><th>Observed type</th><th>Result</th></tr>{% for s in bundle.schema_checks.results %}<tr><td>{{ s.side }}</td><td>{{ s.column }}</td><td>{{ s.expected_type if s.expected_type is not none else 'Any type for required column; no type specified for extras' }}</td><td>{{ s.observed_type if s.observed_type is not none else 'Missing' }}</td><td>{{ s.status }}{% if s.issue %}: {{ s.issue }}{% endif %}</td></tr>{% endfor %}</table>{% endif %}</section>
 {% macro category(value, columns) -%}
 {% if columns|length > 1 %}{% for column in columns %}{{ column }}: {{ 'NULL (missing value)' if value[column] is none else 'Value: ' ~ value[column] }}{% if not loop.last %}<br>{% endif %}{% endfor %}{% else %}{{ 'NULL (missing value)' if value is none else 'Value: ' ~ value }}{% endif %}
 {%- endmacro %}

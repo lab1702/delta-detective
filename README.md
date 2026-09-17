@@ -27,11 +27,13 @@ python -m pytest -q
 Open `investigation/report.html` directly in your browser. It contains all styling
 and analysis details, with no external resources. Output directories must be empty
 or absent; use `--overwrite` to explicitly replace an existing bundle. An output
-directory cannot contain an input or the configuration. A failed investigation
+directory cannot contain an input or the configuration. An execution failure
 leaves a prior bundle untouched and exits nonzero. Finding differences is success
 (exit 0), not an execution error. CLI input/execution errors exit 2. With
 `--fail-on-rule-violation`, failed or undefined threshold rules exit 3 after the
 completed bundle is written.
+Schema contract violations instead write a schema-only bundle and exit 4; replacing
+an existing bundle still requires `--overwrite`.
 
 In a restricted workspace where the OS temporary directory is inaccessible, run
 `python -m pytest -q --basetemp .test-tmp-local` with a fresh dedicated test directory.
@@ -100,6 +102,55 @@ For **COUNT(*)**, replace the metric with `{name: rows, aggregate: count}`;
 neither `column` nor `null_policy` is allowed. `dimensions` defaults to `[]` and
 raw evidence defaults to false. Keys cannot also be metrics or dimensions,
 to avoid exposing key values in aggregate reports.
+
+### Schema contracts
+
+An optional `schema` section defines the expected structure of **each** snapshot,
+independently of whether the two observed schemas match:
+
+```yaml
+schema:
+  columns:
+    order_id: VARCHAR
+    net_amount: DECIMAL(18,2)
+    region: null
+  allow_extra_columns: true
+```
+
+Every listed column is required. A type string requires that exact DuckDB type;
+`null` requires presence but accepts any type. Type aliases and formatting are
+normalized (`int` becomes `INTEGER`, `text` becomes `VARCHAR`). Decimal precision
+and scale must match. Column names are matched exactly as recorded in the loaded
+schema. Set `allow_extra_columns: false` to reject every column not listed;
+the default is true. The columns mapping must be nonempty, and unknown contract
+fields or invalid type strings are configuration errors.
+
+Contracts inspect loaded types; they do not cast values, override CSV inference,
+or repair sources. For example, if both files infer a numeric order ID but the
+contract requires `VARCHAR`, both fail even though they match each other.
+Typed Parquet is preferable when identifier formatting or exact decimals matter.
+
+Results appear in the CLI, HTML, and `schema_checks` in both findings and manifest
+JSON. Each row records the input side, column, expected and observed types, status,
+and any `missing_column`, `type_mismatch`, or `unexpected_column` issue. Without a
+contract the status is `not_configured`; otherwise it is `passed` or `failed`.
+
+A violation stops the comparison before key validation, metric reconciliation,
+threshold evaluation, or raw exports. The run writes a schema-only evidence
+bundle and the CLI exits **4**, regardless of `--fail-on-rule-violation`. Both JSON
+files have `execution_status: schema_contract_failed`; findings have `summary:
+null`, `metrics: []`, and threshold status `not_evaluated`. The Python API returns
+this result instead of raising for a contract violation. SQL replay loads the
+inputs and describes their schemas; contract evaluation remains in Python.
+
+Malformed configuration and unreadable inputs remain execution errors (exit 2)
+and leave prior output untouched. A schema-only bundle can replace a previous
+bundle only with `--overwrite`, through the same staged publication as a successful
+comparison. Passing a contract does not bypass the existing duplicate/null key,
+selected-type compatibility, metric, or reconciliation checks.
+
+Add this section to YAML after running `init`; the wizard does not generate
+contracts automatically. Contracts need no previous run or stored baseline.
 
 ### Multiple metrics, combined dimensions, and focused exports
 
@@ -267,7 +318,7 @@ delta-detective investigate comparison.yaml --out investigation --fail-on-rule-v
 
 Exit codes are 0 for successful execution (and, with the flag, passing or absent
 rules), 2 for configuration/input/execution errors, and 3 for failed or undefined
-rules when the flag is set. The Python API always returns completed results on
+rules when the flag is set, and 4 for schema contract violations. The Python API returns completed results on
 policy failure; inspect `findings["rule_checks"]`. No scheduler or GitHub Actions
 workflow is installed or required.
 
