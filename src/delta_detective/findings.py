@@ -1,5 +1,6 @@
 import json
 from decimal import Decimal
+from .config import InvestigationError
 
 
 LIMITATIONS = [
@@ -19,7 +20,10 @@ def dumps(value):
         if isinstance(obj, Decimal):
             return str(obj)
         raise TypeError(f"Cannot serialize {type(obj)}")
-    return json.dumps(value, default=encode, ensure_ascii=False, indent=2, allow_nan=False)
+    try:
+        return json.dumps(value, default=encode, ensure_ascii=False, indent=2, allow_nan=False)
+    except ValueError as exc:
+        raise InvestigationError("Cannot serialize analysis: nonfinite result or numeric overflow") from exc
 
 
 def build_findings(summary, breakdowns, reclassifications, schema_changes):

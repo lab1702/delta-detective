@@ -1,4 +1,5 @@
 from decimal import Decimal, localcontext
+import math
 from .loading import ident
 from .config import InvestigationError
 
@@ -14,6 +15,8 @@ def check(reference, current, parts, approximate, absolute_contributions=None):
         residual = delta - sum(parts)
         magnitude = sum(abs(p) for p in parts) if absolute_contributions is None else absolute_contributions
         tolerance = max(ABS_TOL, REL_TOL * max(abs(reference), abs(current), magnitude)) if approximate else 0
+        if approximate and not all(math.isfinite(v) for v in [reference, current, *parts, delta, residual, magnitude, tolerance]):
+            raise InvestigationError("Floating-point numeric overflow during reconciliation; use smaller values or exact decimal inputs")
         passed = abs(residual) <= tolerance
     if not passed:
         raise InvestigationError(f"Reconciliation failed: residual {residual}, tolerance {tolerance}")

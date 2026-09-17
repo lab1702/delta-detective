@@ -51,8 +51,11 @@ report:
 ```
 
 Paths resolve relative to this YAML file. Only local `.csv` and `.parquet` inputs
-are supported. No URLs or SQL configuration. YAML uses a safe loader; duplicate
-mapping keys, unknown fields, and contradictory options are rejected.
+are supported. No URLs or SQL configuration.
+Input paths, including parent directories, cannot contain glob characters
+(`*`, `?`, `[` or `]`), so DuckDB reads exactly the file recorded in the manifest.
+YAML uses a safe loader; duplicate mapping keys, unknown fields, and contradictory
+options are rejected.
 For **COUNT(*)**, replace the metric with `{name: rows, aggregate: count}`;
 neither `column` nor `null_policy` is allowed. `dimensions` defaults to `[]` and
 raw evidence defaults to false. Keys cannot also be metrics or dimensions,

@@ -326,3 +326,70 @@ def test_failed_publication_preserves_previous_bundle(tmp_path, monkeypatch, fai
         investigate(cfg, out, overwrite=True)
     assert {p.name: p.read_bytes() for p in out.iterdir()} == before
     assert not list(tmp_path.glob('.delta-*'))
+
+
+def test_demo_overwrite_replaces_bundle(tmp_path):
+    out = tmp_path/'demo'
+    demo(out)
+    (out/'raw_rows.csv').write_text('old evidence')
+    demo(out, overwrite=True)
+    assert {p.name for p in out.iterdir()} == {'reference.parquet', 'current.parquet', 'comparison.yaml'}
+    assert_valid(investigate(out/'comparison.yaml', tmp_path/'out'),
+                 (100000, 82000), (2000, -14000, -6000))
+
+
+def test_demo_failure_preserves_bundle(tmp_path, monkeypatch):
+    import importlib
+    demo_module = importlib.import_module('delta_detective.demo')
+    out = tmp_path/'demo'
+    demo(out)
+    before = {p.name: p.read_bytes() for p in out.iterdir()}
+
+    def fail_write(stage):
+        (stage/'reference.parquet').write_bytes(b'partial input')
+        raise duckdb.IOException('simulated disk failure')
+
+    monkeypatch.setattr(demo_module, '_write_demo', fail_write)
+    with pytest.raises(InvestigationError, match='Could not generate demo'):
+        demo(out, overwrite=True)
+    assert {p.name: p.read_bytes() for p in out.iterdir()} == before
+    assert not list(tmp_path.glob('.delta-*'))
+
+
+@pytest.mark.parametrize('suffix', ['csv', 'parquet'])
+@pytest.mark.parametrize('brackets_in_parent', [False, True])
+def test_glob_input_paths_rejected(tmp_path, suffix, brackets_in_parent):
+    cfg = setup(tmp_path, [], [])
+    folder = tmp_path/'input[1]' if brackets_in_parent else tmp_path
+    folder.mkdir(exist_ok=True)
+    path = folder/f'{"data" if brackets_in_parent else "data[1]"}.{suffix}'
+    path.write_bytes((tmp_path/'reference.parquet').read_bytes())
+    settings = yaml.safe_load(cfg.read_text())
+    settings['reference'] = str(path)
+    cfg.write_text(yaml.safe_dump(settings))
+    with pytest.raises(InvestigationError, match='glob characters'):
+        investigate(cfg, tmp_path/'out')
+    assert not (tmp_path/'out').exists()
+
+
+def test_float_tolerance_overflow():
+    from delta_detective.comparison import check
+    with pytest.raises(InvestigationError, match='numeric overflow'):
+        check(0., 0., [1e308, -1e308], True)
+
+
+def test_float_aggregate_overflow_cli(tmp_path):
+    cfg = setup(tmp_path, [], [(1, 1e308, 'a'), (2, 1e308, 'a')],
+                schema='id INTEGER, amount DOUBLE, category VARCHAR')
+    result = subprocess.run([sys.executable, '-m', 'delta_detective.cli', 'investigate',
+                             str(cfg), '--out', str(tmp_path/'out')], capture_output=True, text=True)
+    assert result.returncode == 2
+    assert 'numeric overflow' in result.stderr
+    assert 'Traceback' not in result.stderr
+    assert not (tmp_path/'out').exists()
+
+
+def test_nonfinite_evidence_rejected():
+    from delta_detective.findings import dumps
+    with pytest.raises(InvestigationError, match='nonfinite result'):
+        dumps({'amount': float('inf')})

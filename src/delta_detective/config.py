@@ -71,6 +71,8 @@ def load_config(path):
         if not isinstance(value, str) or "://" in value or value.startswith(("//", "\\\\")):
             raise InvestigationError(f"{side} must be a local file path")
         resolved = (path.parent / value).resolve()
+        if any(character in str(resolved) for character in '*?[]'):
+            raise InvestigationError(f"{side}: input paths must not contain glob characters (* ? [ ]); rename the file or parent directory")
         if not resolved.is_file() or resolved.suffix.lower() not in (".csv", ".parquet"):
             raise InvestigationError(f"{side}: expected an existing CSV or Parquet file: {resolved}")
         cfg[side] = str(resolved)
