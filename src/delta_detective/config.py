@@ -43,7 +43,7 @@ def load_config(path):
         cfg = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise InvestigationError(f"Cannot read configuration: {exc}") from exc
-    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema", "compare_fields"],
+    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema", "compare_fields", "csv"],
            ["mode", "reference", "current", "key"], "configuration")
     if cfg["mode"] != "snapshots":
         raise InvestigationError("Only mode: snapshots is supported")
@@ -119,7 +119,43 @@ def load_config(path):
             raise InvestigationError("Evidence export limit must be a positive integer")
     for side in ("reference", "current"):
         cfg[side] = local_input(cfg[side], path.parent, side)
+    validate_csv_options(cfg)
     return cfg
+
+
+def validate_csv_options(cfg):
+    if "csv" not in cfg:
+        return
+    fields(cfg["csv"], ["reference", "current"], [], "csv")
+    allowed = ["types", "delimiter", "header", "quote", "escape", "nullstr", "dateformat", "timestampformat"]
+    for side, options in cfg["csv"].items():
+        fields(options, allowed, [], f"csv.{side}")
+        if Path(cfg[side]).suffix.lower() != ".csv":
+            raise InvestigationError(f"csv.{side} requires a CSV input")
+        for name, value in options.items():
+            label = f"csv.{side}.{name}"
+            if name == "types":
+                if not isinstance(value, dict) or not value:
+                    raise InvestigationError(f"{label} must be a nonempty mapping of columns to DuckDB types")
+                for column, typ in value.items():
+                    if not column or not isinstance(typ, str) or not typ.strip():
+                        raise InvestigationError(f"{label} requires nonempty column names and type strings")
+                    try:
+                        value[column] = str(duckdb.sqltype(typ))
+                    except (duckdb.Error, ValueError):
+                        raise InvestigationError(f"Invalid CSV type for column {column!r}") from None
+            elif name == "header":
+                if type(value) is not bool:
+                    raise InvestigationError(f"{label} must be boolean")
+            else:
+                if not isinstance(value, str) or "\x00" in value or "\n" in value or "\r" in value:
+                    raise InvestigationError(f"{label} must be text without NUL or newline characters")
+                if name in ("delimiter", "quote", "escape"):
+                    minimum = 1 if name == "delimiter" else 0
+                    if not minimum <= len(value.encode("utf-8")) <= 1:
+                        raise InvestigationError(f"{label} must be one ASCII character" + (" or empty" if minimum == 0 else ""))
+                elif name in ("dateformat", "timestampformat") and not value:
+                    raise InvestigationError(f"{label} must be nonempty")
 
 
 def configured_metrics(cfg):

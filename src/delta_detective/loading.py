@@ -24,24 +24,47 @@ def load_snapshots(con, cfg, execute):
         parsing = {"format": Path(path).suffix[1:], "hive_partitioning": False}
         if Path(path).suffix.lower() == ".csv":
             # Capture the actual sniffer's decisions; materialize with explicit settings.
-            cursor = con.execute(f"SELECT * FROM sniff_csv({literal(path)}, sample_size=-1)")
+            overrides = cfg.get("csv", {}).get(side, {})
+            sniff_settings = []
+            for name, value in overrides.items():
+                if name == "types":
+                    rendered = "{" + ",".join(f"{literal(k)}:{literal(v)}" for k, v in value.items()) + "}"
+                elif name == "header":
+                    rendered = str(value).lower()
+                else:
+                    rendered = literal(value)
+                sniff_settings.append(f"{'delim' if name == 'delimiter' else name}={rendered}")
+            extra = ", " + ", ".join(sniff_settings) if sniff_settings else ""
+            cursor = con.execute(f"SELECT * FROM sniff_csv({literal(path)}, sample_size=-1{extra})")
             sniff = dict(zip([c[0] for c in cursor.description], cursor.fetchone()))
             cols = sniff["Columns"]
+            missing = set(overrides.get("types", {})) - {c["name"] for c in cols}
+            if missing:
+                raise InvestigationError(f"{side}: CSV type overrides name unknown columns {sorted(missing)}")
             options = {"delim": sniff["Delimiter"], "quote": sniff["Quote"], "escape": sniff["Escape"],
                        "dateformat": sniff["DateFormat"],
                        "timestampformat": sniff["TimestampFormat"]}
             for option in ("quote", "escape"):
                 if options[option] == "(empty)":
                     options[option] = ""
+            # Explicit settings take precedence even if the sniffer does not need them.
+            for name, value in overrides.items():
+                if name not in ("types", "header", "nullstr"):
+                    options["delim" if name == "delimiter" else name] = value
+            header = overrides.get("header", sniff["HasHeader"])
+            nullstr = overrides.get("nullstr", "")
             if sniff["SkipRows"]:
                 raise InvestigationError(f"{side}: CSV inference would skip leading rows; supply a clean, consistent CSV with no preamble")
             settings = [f"{k}={literal(v)}" for k, v in options.items() if v is not None]
-            settings += [f"header={str(sniff['HasHeader']).lower()}", f"skip={sniff['SkipRows']}",
+            settings += [f"header={str(header).lower()}", f"skip={sniff['SkipRows']}",
                          "auto_detect=false", "hive_partitioning=false", "strict_mode=true", "ignore_errors=false", "null_padding=false",
-                         "nullstr=''", "comment=''", "columns={" + ",".join(f"{literal(c['name'])}:{literal(c['type'])}" for c in cols) + "}"]
+                         f"nullstr={literal(nullstr)}", "comment=''", "columns={" + ",".join(f"{literal(c['name'])}:{literal(c['type'])}" for c in cols) + "}"]
             source = f"read_csv({literal(path)}, {', '.join(settings)})"
             parsing.update({"sniffer": sniff, "sample_size": -1, "strict_mode": True,
-                            "ignore_errors": False, "null_padding": False, "nullstr": "",
+                            "ignore_errors": False, "null_padding": False, "nullstr": nullstr,
+                            "overrides": overrides,
+                            "effective": {**options, "header": header, "nullstr": nullstr,
+                                          "columns": {c["name"]: c["type"] for c in cols}},
                             "newline_reader": "DuckDB default newline recognition; sniffer observation recorded separately",
                             "comment": ""})
         else:
@@ -76,12 +99,12 @@ def validate_loaded(con, cfg, profiles, execute):
                 typ = schema[col]
                 numeric = typ in ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT", "FLOAT", "DOUBLE") or typ.startswith("DECIMAL(")
                 if not numeric:
-                    raise InvestigationError(f"{side}: sum column must be numeric; inferred {typ}. Use typed Parquet for exact decimals; repair malformed CSV values upstream.")
+                    raise InvestigationError(f"{side}: sum column must be numeric; inferred {typ}. Use explicit CSV types or typed Parquet for exact decimals; repair malformed CSV values upstream.")
                 execute(f"SELECT CASE WHEN EXISTS (SELECT 1 FROM {side} WHERE {ident(col)} IS NULL OR NOT isfinite({ident(col)})) THEN error('{side}: null or nonfinite metric') ELSE true END")
     for col in required:
         a, b = (profiles[s]["schema"][col] for s in ("reference", "current"))
         if a != b:
-            raise InvestigationError(f"Incompatible selected column types for {col!r}: {a} / {b}. Supply matching explicit types in Parquet; no implicit coercion is performed.")
+            raise InvestigationError(f"Incompatible selected column types for {col!r}: {a} / {b}. Supply matching explicit CSV types or typed Parquet; no implicit coercion is performed.")
     for col in cfg["key"]:
         typ = profiles["reference"]["schema"][col]
         if typ in ("FLOAT", "DOUBLE") or any(x in typ for x in ("[", "STRUCT", "MAP", "UNION")):

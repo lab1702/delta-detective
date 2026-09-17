@@ -162,7 +162,7 @@ schema. Set `allow_extra_columns: false` to reject every column not listed;
 the default is true. The columns mapping must be nonempty, and unknown contract
 fields or invalid type strings are configuration errors.
 
-Contracts inspect loaded types; they do not cast values, override CSV inference,
+Contracts inspect loaded types; they do not cast values, override CSV parsing,
 or repair sources. For example, if both files infer a numeric order ID but the
 contract requires `VARCHAR`, both fail even though they match each other.
 Typed Parquet is preferable when identifier formatting or exact decimals matter.
@@ -277,8 +277,9 @@ Each field reports changed and unchanged counts, non-null-to-null (`became_null`
 null-to-non-null (`from_null`), both-null, and non-null value changes. Text fields
 also count transitions to and from exactly empty text. Whitespace-only text is
 not blank. Null-to-empty counts as both `from_null` and `became_blank`; these
-measures can overlap. CSV empty fields are read as null under the existing loader,
-so typed Parquet is needed to preserve a distinct empty-string value.
+measures can overlap. CSV empty fields are read as null by default; use a
+different `nullstr` marker with a `VARCHAR` type override, or typed Parquet,
+to preserve a distinct empty-string value.
 
 Numeric fields report increases/decreases; date/time fields use the same counters
 for later/earlier values. Direction counts exclude null transitions. Text and
@@ -618,17 +619,60 @@ booleans, and exact numeric categorical codes. Nonselected schema changes are
 reported but do not block comparison. Every key component must be non-null and
 every key tuple unique. Duplicate keys block analysis before any join.
 
-CSV uses DuckDB full-file schema sniffing (`sample_size=-1`), then a strict read
+CSV defaults to DuckDB full-file schema sniffing (`sample_size=-1`), then a strict read
 with explicit inferred columns, delimiter, quote/escape, header, date/time formats,
 no ignored errors, no null padding, no comments, and empty fields interpreted as
-null. Leading-row skipping is rejected. The reader uses DuckDB's default newline
+null. Optional parsing overrides are described below. Leading-row skipping is rejected. The reader uses DuckDB's default newline
 recognition; the manifest also records the sniffer's observed newline. Explicit
 sniffer newline settings interact incorrectly with strict mode in DuckDB 1.5.5,
 so they are deliberately not passed to the reader. Header-only CSV columns may
-infer incompatible types; use typed empty Parquet files for empty snapshots.
+infer incompatible types; use explicit CSV types or typed empty Parquet files for empty snapshots.
 Malformed structure or unsuitable numeric inference fails with an actionable
 error. Numeric-looking identifiers can lose formatting during CSV inference;
-use typed Parquet to preserve identifier semantics. No source data is repaired.
+use explicit `VARCHAR` CSV types or typed Parquet to preserve identifier semantics. No source data is repaired.
+
+### Optional CSV parsing overrides
+
+Add a `csv` section to the YAML configuration to override parsing separately for
+each input. Omitted settings retain automatic inference and existing defaults.
+For example, preserve leading zeros in IDs and read amounts directly as decimals:
+
+```yaml
+csv:
+  reference:
+    header: true
+    delimiter: ";"
+    types:
+      order_id: VARCHAR
+      net_amount: DECIMAL(18,2)
+  current:
+    header: true
+    types:
+      order_id: VARCHAR
+      net_amount: DECIMAL(18,2)
+```
+
+Each side accepts `types` (a nonempty mapping of column names to DuckDB type
+strings), `delimiter`, `header` (boolean), `quote`, `escape`, `nullstr`, `dateformat`,
+and `timestampformat`. The delimiter must be one ASCII character; quote and escape
+must be one ASCII character or empty. Format strings use DuckDB conventions, for
+example `dateformat: "%d/%m/%Y"`. The default null marker is empty text;
+`nullstr: "NA"` instead treats `NA` as null. Quote YAML strings explicitly when
+they could otherwise be interpreted as booleans or null.
+
+Types apply during CSV reading, before comparison; unspecified columns are
+inferred. Unknown column names and invalid options fail the run. With
+`header: false`, use DuckDB's generated names such as `column0` and `column1`
+(wide files may use zero-padded names). Set `header: true` and types for every
+selected column when comparing a header-only CSV with a populated snapshot.
+Overrides on Parquet inputs are rejected. Schema contracts remain separate checks
+of the resulting loaded types.
+
+The manifest records the requested overrides and effective parsing settings;
+replay SQL uses those effective settings. Strict row validation remains enabled.
+DuckDB's memory, thread, and other resource settings remain unchanged. The init
+wizard uses automatic CSV inference; add overrides to the YAML configuration
+before running `investigate` when needed.
 
 ## Interpretation and arithmetic
 

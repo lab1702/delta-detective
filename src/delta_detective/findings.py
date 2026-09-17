@@ -10,7 +10,7 @@ LIMITATIONS = [
     "Only selected metrics, dimensions, and compare_fields are compared after matching keys. Other row fields are not checked for changes.",
     "Aggregate-only reports are not anonymous: categories and totals may be sensitive.",
     "Rerunning analysis.sql requires matching input files at the recorded paths and a compatible DuckDB version.",
-    "Selected column types must match exactly. CSV inference can interpret numeric-looking identifiers; use typed Parquet when identity or decimal precision matters.",
+    "Selected column types must match exactly. CSV inference can interpret numeric-looking identifiers; use explicit CSV types or typed Parquet when identity or decimal precision matters.",
     "Floating-point checks use max(1e-9, 1e-12 * max(abs(reference), abs(current), sum(abs(contributions)))).",
 ]
 

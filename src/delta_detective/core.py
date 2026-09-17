@@ -134,7 +134,7 @@ def investigate(config, out, overwrite=False):
                 side = "reference" if "reference:" in message else "current"
                 raise InvestigationError(f"{side}: {reason}; repair the source snapshot and rerun") from None
         category = "numeric overflow" if "overflow" in message.lower() or "out of range" in message.lower() else "parse, type, or SQL execution error"
-        raise InvestigationError(f"DuckDB {category}; verify CSV structure and inferred types or supply explicitly typed Parquet. No successful bundle was written.") from None
+        raise InvestigationError(f"DuckDB {category}; verify CSV structure and parsing overrides, or supply explicitly typed Parquet. No successful bundle was written.") from None
     finally:
         con.close()
         if stage.exists():
