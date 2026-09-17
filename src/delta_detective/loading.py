@@ -1,7 +1,7 @@
 import hashlib
 import re
 from pathlib import Path
-from .config import InvestigationError, configured_metrics, selected_dimensions, FIELD_PERCENTAGES
+from .config import InvestigationError, configured_metrics, selected_dimensions, FIELD_PERCENTAGES, identifier_key
 
 
 def ident(value):
@@ -69,9 +69,24 @@ def load_snapshots(con, cfg, execute):
                             "comment": ""})
         else:
             source = f"read_parquet({literal(path)}, hive_partitioning=false)"
-        execute(f"CREATE TABLE {side} AS SELECT * FROM {source}")
+        mapping = cfg.get("column_mapping", {}).get(side, {})
+        projection = "*"
+        source_schema = None
+        if mapping:
+            source_schema = {r[0]: r[1] for r in con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()}
+            missing = set(mapping) - source_schema.keys()
+            if missing:
+                raise InvestigationError(f"{side}: column_mapping names unknown source columns {sorted(missing)}")
+            targets = [mapping.get(name, name) for name in source_schema]
+            normalized = [identifier_key(name) for name in targets]
+            if len(normalized) != len(set(normalized)):
+                raise InvestigationError(f"{side}: column_mapping causes a column name collision (case-insensitive)")
+            projection = ", ".join(f"{ident(name)} AS {ident(target)}"
+                                   for name, target in zip(source_schema, targets))
+        execute(f"CREATE TABLE {side} AS SELECT {projection} FROM {source}")
         schema = {r[0]: r[1] for r in con.execute(f"DESCRIBE {side}").fetchall()}
-        profiles[side] = {"schema": schema, "sha256": fingerprint(path), "parsing": parsing}
+        profiles[side] = {"schema": schema, "source_schema": source_schema if source_schema is not None else schema,
+                          "column_mapping": mapping, "sha256": fingerprint(path), "parsing": parsing}
     return profiles
 
 

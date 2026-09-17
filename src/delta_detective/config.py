@@ -43,7 +43,7 @@ def load_config(path):
         cfg = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise InvestigationError(f"Cannot read configuration: {exc}") from exc
-    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema", "compare_fields", "csv"],
+    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema", "compare_fields", "csv", "column_mapping"],
            ["mode", "reference", "current", "key"], "configuration")
     if cfg["mode"] != "snapshots":
         raise InvestigationError("Only mode: snapshots is supported")
@@ -120,7 +120,27 @@ def load_config(path):
     for side in ("reference", "current"):
         cfg[side] = local_input(cfg[side], path.parent, side)
     validate_csv_options(cfg)
+    validate_column_mapping(cfg)
     return cfg
+
+
+def identifier_key(name):
+    # DuckDB identifiers use ASCII case-insensitive comparison, even when quoted.
+    return name.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
+
+
+def validate_column_mapping(cfg):
+    mappings = cfg.get("column_mapping", {})
+    fields(mappings, ["reference", "current"], [], "column_mapping")
+    for side, mapping in mappings.items():
+        if not isinstance(mapping, dict):
+            raise InvestigationError(f"column_mapping.{side} must map source names to logical names")
+        for source, target in mapping.items():
+            if any(not isinstance(n, str) or not n or "\x00" in n for n in (source, target)):
+                raise InvestigationError(f"column_mapping.{side} names must be nonempty strings without NUL")
+        targets = [identifier_key(n) for n in mapping.values()]
+        if len(targets) != len(set(targets)):
+            raise InvestigationError(f"column_mapping.{side} has colliding target names (case-insensitive)")
 
 
 def validate_csv_options(cfg):

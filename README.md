@@ -140,6 +140,38 @@ neither `column` nor `null_policy` is allowed. `dimensions` defaults to `[]` and
 raw evidence defaults to false. Keys cannot also be metrics or dimensions,
 to avoid exposing key values in aggregate reports.
 
+### Column-name mapping
+
+Use optional per-input mappings when the same logical columns have different
+names in the source files. Each entry maps an exact source name to the name used
+throughout the comparison:
+
+```yaml
+column_mapping:
+  current:
+    customerId: customer_id
+    netAmount: net_amount
+```
+
+Both `reference` and `current` accept mappings, for CSV or Parquet. Unlisted
+columns keep their names. Mappings apply simultaneously, so swaps are supported;
+source names refer to the original loaded schema, not the result of another
+mapping. Source names must match exactly, including case. Missing source columns,
+empty names, and target collisions (including collisions with unrenamed columns)
+fail the run. Collision checks follow DuckDB's ASCII case-insensitive identifier
+rules; automatic suffixes are never used to resolve mapped-name collisions.
+
+CSV parsing and `csv.types` use **source names**. Schema contracts, keys, metrics,
+dimensions, field comparisons, rules, and evidence exports use **mapped names**.
+Mapping changes only names, preserving all values, types, rows, and column order.
+It happens before schema validation; incompatible types still fail validation.
+
+The manifest records each input's `source_schema`, `column_mapping`, and mapped
+`schema`, and replay SQL includes the explicit column aliases. Inputs are never
+modified. Each run is standalone and DuckDB resource settings remain unchanged.
+Add mappings directly to the YAML configuration; the init wizard inspects the
+original source names.
+
 ### Schema contracts
 
 An optional `schema` section defines the expected structure of **each** snapshot,
