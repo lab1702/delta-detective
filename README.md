@@ -115,6 +115,7 @@ each metric:
 | `added` | Keys present only in the current snapshot |
 | `removed` | Keys present only in the reference snapshot |
 | `changed` | Matched keys whose metric value changed; excludes category-only moves |
+| `moved` | Matched keys with any selected dimension or group column changed, including category-only moves |
 | `largest_changes` | Nonzero row contributions across additions, removals, and matches |
 
 Focused exports include a signed `contribution` column. They sort by absolute
@@ -128,6 +129,49 @@ and so on. With multiple metrics, each filename starts with its zero-based metri
 index, such as `metric_0_removed_rows.csv`. `include_raw_rows: true` independently
 adds the full `raw_rows.csv` export (with the same prefix rule). The report and
 manifest list every exported file, metric, selection, limit, and row count.
+
+### Category movement tables
+
+Each configured dimension and dimension group automatically includes a movement
+table for every metric. A transition shows its original and new categories,
+number of matched keys, how many also changed metric value, and the before/after
+metric amounts. Additions, removals, unchanged categories, and metric-only changes
+are excluded. For count metrics, both amounts equal the moved record count.
+
+Tables rank by moved record count descending, then source and destination
+categories for deterministic ties. The top 50 transitions are retained, followed
+by an explicit Other remainder when needed. Null categories remain distinct from
+literal text and Other; combined categories retain their component types.
+Displayed row counts and before/after amounts are checked against the existing
+reclassification totals, using the existing tolerance for floating-point amounts.
+Before/after amounts describe the moved population, not additional contributions
+to the overall delta. A key can appear in several dimension/group tables; do not
+add those tables together. A change in category does not establish why it happened.
+
+In JSON and the Python API, movement details live at
+`findings["metrics"][i]["reclassifications"][j]["movements"]`, with `columns`,
+`rows`, amount `checks`, and a qualified `evidence` table name. The legacy
+top-level `reclassifications` exposes the first metric's tables too. SQL replay
+materializes the complete `movement_N` tables and bounded `movement_N_display`
+tables in each metric's schema; display order is `ORDER BY rank`.
+
+To export underlying moved records, explicitly opt in:
+
+```yaml
+report:
+  evidence_exports:
+    - kind: moved
+      limit: 100
+```
+
+This writes `moved_rows.csv` (or `metric_0_moved_rows.csv`, etc. for multiple
+metrics). It contains each qualifying key once per metric, even if several
+dimensions changed, with before/after selected fields and metric contribution.
+Like other focused exports, it sorts by absolute metric contribution descending,
+then key; omit `limit` to export all moved records. Zero-contribution category
+moves are included. With no selected dimensions or no moves, the file has only
+a header. Aggregate movement tables never include raw keys; raw export remains
+opt-in. The selection is replayable as `evidence_moved` in each metric's schema.
 
 ### Threshold rules
 

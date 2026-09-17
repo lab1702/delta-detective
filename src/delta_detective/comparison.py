@@ -108,4 +108,39 @@ def compare(con, cfg, profiles, execute):
           FROM joined WHERE rp AND cp AND ({moved})""")
         r = con.execute(f"SELECT * FROM reclassification_{i}").fetchone()
         reclassifications.append(dict(zip(["rows", "also_metric_changed", "reference_amount", "current_amount"], r), name=name, evidence=f"reclassification_{i}"))
+        reclassifications[-1]["movements"] = movement_table(
+            con, execute, i, group, indices, moved, reclassifications[-1], approximate)
     return summary, breakdowns, reclassifications
+
+
+def movement_table(con, execute, index, group, indices, moved, totals, approximate):
+    """Bounded transition evidence for matched keys, checked against moved totals."""
+    def category(prefix):
+        if len(group) == 1:
+            return f"{prefix}d{indices[0]}"
+        return "struct_pack(" + ", ".join(f"{ident(d)} := {prefix}d{j}" for d, j in zip(group, indices)) + ")"
+
+    table = f"movement_{index}"
+    execute(f"""CREATE TABLE {table} AS SELECT
+      {category('r')} AS from_category, {category('c')} AS to_category,
+      count(*) AS rows, count(*) FILTER (WHERE rv IS DISTINCT FROM cv) AS also_metric_changed,
+      sum(rv) AS reference_amount, sum(cv) AS current_amount
+      FROM joined WHERE rp AND cp AND ({moved}) GROUP BY 1, 2""")
+    execute(f"""CREATE TABLE {table}_ranked AS SELECT *, row_number() OVER (
+      ORDER BY rows DESC, from_category NULLS FIRST, to_category NULLS FIRST) AS rank FROM {table}""")
+    execute(f"""CREATE TABLE {table}_display AS
+      SELECT *, false AS is_other FROM {table}_ranked WHERE rank <= {TOP_GROUPS}
+      UNION ALL SELECT NULL, NULL, sum(rows)::BIGINT, sum(also_metric_changed)::BIGINT,
+        sum(reference_amount), sum(current_amount), {TOP_GROUPS+1}, true
+      FROM {table}_ranked WHERE rank > {TOP_GROUPS} HAVING count(*) > 0""")
+    cur = con.execute(f"SELECT * EXCLUDE(rank) FROM {table}_display ORDER BY rank")
+    rows = [dict(zip([c[0] for c in cur.description], row)) for row in cur.fetchall()]
+    for field in ("rows", "also_metric_changed"):
+        if sum(row[field] for row in rows) != totals[field]:
+            raise InvestigationError("Movement row-count identity failed")
+    checks = {}
+    for field in ("reference_amount", "current_amount"):
+        magnitude = con.execute(f"SELECT coalesce(sum(abs({field})),0) FROM {table}").fetchone()[0] if approximate else 0
+        checks[field] = check(0, totals[field], [row[field] for row in rows], approximate, magnitude)
+    return {"columns": group, "rows": rows, "checks": checks, "evidence": table + "_display",
+            "ranking": "Moved row count descending, then source and destination categories; top 50 plus Other."}

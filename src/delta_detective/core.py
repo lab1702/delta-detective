@@ -67,6 +67,8 @@ def investigate(config, out, overwrite=False):
                 finding["evidence"] = f"analysis.sql: {namespace}.reconciliation"
             for finding in dimensions + reclassifications:
                 finding["evidence"] = namespace + "." + finding["evidence"]
+            for finding in reclassifications:
+                finding["movements"]["evidence"] = namespace + "." + finding["movements"]["evidence"]
             item.update(metric=metric, validation=checks, sql_schema=namespace)
             results.append(item)
             evidence.extend(export_evidence(con, execute, cfg, stage, index, len(metrics)))
@@ -84,6 +86,7 @@ def investigate(config, out, overwrite=False):
             replay.append(f"SELECT * FROM {ns}.reconciliation;")
             for i in range(len(item["dimensions"])):
                 replay.append(f"SELECT * FROM {ns}.dimension_{i}_display ORDER BY rank; SELECT * FROM {ns}.reclassification_{i};")
+                replay.append(f"SELECT * FROM {ns}.movement_{i}_display ORDER BY rank;")
         sql = "-- Run in a fresh DuckDB database; matching input files are required.\n" + "\n\n".join(statements + replay)
         manifest = {"application_version": "0.1.0", "duckdb_version": duckdb.__version__,
                     "created_utc": datetime.now(timezone.utc).isoformat(), "configuration": cfg,
@@ -144,8 +147,11 @@ def export_evidence(con, execute, cfg, stage, metric_index, metric_count):
             query = "SELECT * FROM joined"
             view = "joined"
         else:
+            changed_dimensions = " OR ".join(
+                f"rd{i} IS DISTINCT FROM cd{i}" for i in range(len(selected_dimensions(cfg)))) or "false"
             predicates = {"added": "rp IS NULL", "removed": "cp IS NULL",
                           "changed": "rp AND cp AND rv IS DISTINCT FROM cv",
+                          "moved": f"rp AND cp AND ({changed_dimensions})",
                           "largest_changes": "coalesce(cv,0) IS DISTINCT FROM coalesce(rv,0)"}
             keys = ", ".join(f"k{i}" for i in range(len(cfg["key"])))
             query = f"SELECT *, coalesce(cv,0)-coalesce(rv,0) AS contribution FROM joined WHERE {predicates[kind]}"
