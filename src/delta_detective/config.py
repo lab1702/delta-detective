@@ -70,7 +70,8 @@ def load_config(path):
         validate_metric(metric, cfg["key"])
     if len({m["name"] for m in metrics}) != len(metrics):
         raise InvestigationError("Metric names must be unique")
-    validate_rules(cfg.setdefault("rules", []), {m["name"] for m in metrics})
+    validate_rules(cfg.setdefault("rules", []), {m["name"] for m in metrics},
+                   [[d] for d in cfg["dimensions"]] + cfg["dimension_groups"])
     cfg.setdefault("report", {})
     fields(cfg["report"], ["include_raw_rows", "evidence_exports"], [], "report")
     cfg["report"].setdefault("include_raw_rows", False)
@@ -134,12 +135,12 @@ def threshold_number(value):
     return number
 
 
-def validate_rules(rules, metric_names):
+def validate_rules(rules, metric_names, groups=()):
     if not isinstance(rules, list):
         raise InvestigationError("rules must be a list")
     seen = set()
     for rule in rules:
-        fields(rule, ["name", "metric", "measure", "min", "max"], ["name", "metric", "measure"], "rule")
+        fields(rule, ["name", "metric", "measure", "min", "max", "group_by", "where"], ["name", "metric", "measure"], "rule")
         name = rule["name"]
         if not isinstance(name, str) or not name.strip() or name in seen:
             raise InvestigationError("Rule names must be unique, nonempty text")
@@ -151,6 +152,18 @@ def validate_rules(rules, metric_names):
         bounds = {k: threshold_number(rule[k]) for k in ("min", "max") if k in rule}
         if not bounds or ("min" in bounds and "max" in bounds and bounds["min"] > bounds["max"]):
             raise InvestigationError("Rule requires min and/or max, with min <= max")
+        if "group_by" in rule:
+            names(rule["group_by"], "rule group_by", True)
+            if rule["group_by"] not in groups:
+                raise InvestigationError("Rule group_by must match a configured dimension or dimension group in order")
+        if "where" in rule:
+            if "group_by" not in rule or not isinstance(rule["where"], dict) or set(rule["where"]) != set(rule["group_by"]):
+                raise InvestigationError("Rule where must specify exactly the group_by columns")
+            for value in rule["where"].values():
+                if value is not None and type(value) not in (str, int, float, bool):
+                    raise InvestigationError("Segment selectors must be scalar values or null")
+                if type(value) is float:
+                    threshold_number(value)
 
 
 def local_input(value, base, side):

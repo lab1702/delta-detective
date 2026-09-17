@@ -4,7 +4,9 @@ Two datasets in. A reconciled difference and an inspectable trail of evidence ou
 
 A local Python CLI for comparing **two versions of the same logical dataset**.
 DuckDB performs loading, validation, joins, and aggregation. Python receives only
-bounded summaries (at most 51 rows per breakdown per metric), never the full datasets.
+bounded aggregate summaries (at most 51 rows per breakdown per metric), never raw
+datasets. Segment rules scan all segment aggregates in batches of 50 and retain
+at most 50 displayed results per rule.
 No service, network calls, telemetry, pandas, or generated explanations are used.
 
 ## Install and run
@@ -278,6 +280,72 @@ remain approximate. Rule bounds have no implicit tolerance; arithmetic
 reconciliation tolerance does not relax policy limits. Rules flag observed
 changes, not proven errors or operational causes. SQL replay reproduces the
 underlying measurements; it does not reevaluate Python threshold rules.
+
+### Segment-level threshold rules
+
+Add `group_by` to apply a rule independently to every category in a configured
+dimension or combined dimension group. It must match the configured column list
+and order exactly. An optional `where` selects one exact segment by specifying
+every group column. For example:
+
+```yaml
+dimensions: [region, source]
+dimension_groups: [[region, source]]
+rules:
+  - name: Every region stays within ten percent
+    metric: net_sales
+    group_by: [region]
+    measure: abs_percent_change
+    max: 10
+  - name: Each source retains ninety-five percent of its records
+    metric: orders
+    group_by: [source]
+    measure: removed_percent
+    max: 5
+  - name: West paid search sales floor
+    metric: net_sales
+    group_by: [region, source]
+    where: {region: West, source: paid search}
+    measure: current_total
+    min: 1000
+```
+
+Segment rules support the same measures and inclusive bounds as overall rules.
+Totals and row counts use each snapshot's own category membership. `removed_rows`
+counts reference keys that disappeared **or moved out of that segment**;
+`added_rows` counts new keys **or keys that moved into that segment**.
+`removed_percent` divides segment removals by the reference segment row count.
+It therefore measures loss of the original segment membership even when new
+records replace it. Overall removal rules still count only keys absent from the
+current dataset.
+
+Every actual segment present in either snapshot is checked, including those
+hidden by the breakdown report's Other remainder. No rule is evaluated against
+Other as an aggregate category. New segments with zero reference totals have
+undefined percentage change; disappeared segments have zero current totals.
+A zero reference row count makes removal percentage undefined. An empty dataset
+or a `where` selector matching neither snapshot also produces an undefined rule.
+Undefined results cause the overall rule check to fail and, with
+`--fail-on-rule-violation`, return exit code 3 after writing the report.
+
+Use YAML `null` to select an actual null category, quoted text for string
+categories, and booleans for boolean categories. Numeric categories accept finite
+numbers or quoted exact decimals; selectors are compared without rounding to the
+column's scale. For example, `"1.251"` does not select decimal category `1.25`.
+
+HTML, CLI, and JSON show per-segment observations and outcomes. Each segment rule
+has `segment_counts`, `total_segments`, `segments`, and `omitted_segments` in
+`rule_checks.results`. Up to 50 results are displayed, with failed segments first,
+undefined next, and passed last; categories determine order within each status.
+Counts always cover the complete selected population, not just displayed rows.
+SQL replay creates complete aggregate `segment_rule_N` tables in the metric's
+schema, where N is the rule's zero-based position in configuration; `g0`, `g1`,
+etc. follow `group_by` order. These tables include all actual segments before the
+optional Python selector and threshold evaluation. Source keys are not exposed.
+
+Add segment scopes to YAML after using `init`; the wizard currently authors
+overall rules. Each investigation remains standalone and uses only its configured
+reference and current snapshots. No history store or GitHub Actions is needed.
 
 Selected columns must have exactly matching DuckDB types across snapshots.
 Floating-point and nested key types are rejected. Dimensions accept strings,

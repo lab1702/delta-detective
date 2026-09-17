@@ -43,6 +43,10 @@ def main(argv=None):
                 bounds = ", ".join(f"{key}={rule[key]}" for key in ("min", "max") if key in rule)
                 observed = rule['observed'] if rule['observed'] is not None else 'undefined'
                 print(f"{rule['name']}: {rule['status']} ({rule['metric']}.{rule['measure']}={observed}; {bounds})")
+                if 'segment_counts' in rule:
+                    print(f"  Segments: {rule['segment_counts']}; omitted from display: {rule['omitted_segments']}")
+                    for segment in rule['segments']:
+                        print(f"  {segment['segment']}: {segment['status']}; observed={segment['observed']}")
             if args.fail_on_rule_violation and data["rule_checks"]["status"] == "failed":
                 return 3
         return 0

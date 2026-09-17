@@ -78,7 +78,7 @@ def investigate(config, out, overwrite=False):
         data = dict(results[0])  # Legacy top-level fields refer to the first metric.
         data["metrics"] = results
         data["evidence_exports"] = evidence
-        data["rule_checks"] = evaluate_rules(cfg["rules"], results)
+        data["rule_checks"] = evaluate_rules(cfg["rules"], results, con, cfg, execute)
         summary = data["summary"]
         replay = []
         for item in results:

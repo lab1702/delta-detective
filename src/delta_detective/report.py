@@ -11,7 +11,12 @@ TEMPLATE = """<!doctype html><html lang="en"><meta charset="utf-8">
 <section><h2>Threshold rules: {{ bundle.rule_checks.status }}</h2>
 <p>Rules flag changes for review; they do not establish errors or operational causes. Bounds are inclusive. Undefined measurements do not pass. Floating-point metrics retain approximate arithmetic; no reconciliation tolerance is applied to rule bounds.</p>
 {% if bundle.rule_checks.results %}<table><tr><th>Rule</th><th>Metric / measure</th><th>Observed</th><th>Minimum</th><th>Maximum</th><th>Result</th></tr>
-{% for r in bundle.rule_checks.results %}<tr><td>{{ r.name }}</td><td>{{ r.metric }} / {{ r.measure }}</td><td>{{ r.observed if r.observed is not none else 'undefined' }}</td><td>{{ r.min if 'min' in r else 'none' }}</td><td>{{ r.max if 'max' in r else 'none' }}</td><td>{{ r.status }}{% if r.reason %}: {{ r.reason }}{% endif %}</td></tr>{% endfor %}</table>{% else %}<p>No threshold rules configured.</p>{% endif %}</section>
+{% for r in bundle.rule_checks.results %}<tr><td>{{ r.name }}</td><td>{{ r.metric }} / {{ r.measure }}</td><td>{{ 'See segments below' if r.group_by is defined else r.observed if r.observed is not none else 'undefined' }}</td><td>{{ r.min if 'min' in r else 'none' }}</td><td>{{ r.max if 'max' in r else 'none' }}</td><td>{{ r.status }}{% if r.reason %}: {{ r.reason }}{% endif %}</td></tr>{% endfor %}</table>{% else %}<p>No threshold rules configured.</p>{% endif %}</section>
+{% for rule in bundle.rule_checks.results if rule.group_by is defined %}
+<section><h3>Segment rule: {{ rule.name }}</h3><p>Grouped by {{ rule.group_by|join(', ') }}. {{ rule.total_segments }} segments evaluated; passed {{ rule.segment_counts.passed }}, failed {{ rule.segment_counts.failed }}, undefined {{ rule.segment_counts.undefined }}. {{ rule.omitted_segments }} omitted from display. Failures and undefined results are shown first, up to 50 segments.</p>
+{% if rule.reason %}<p>{{ rule.reason }}</p>{% endif %}
+<table><tr><th>Segment</th><th>Observed</th><th>Result</th></tr>{% for s in rule.segments %}<tr><td>{% for k,v in s.segment.items() %}{{ k }}: {{ 'NULL (missing value)' if v is none else 'Value: ' ~ v }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td><td>{{ s.observed if s.observed is not none else 'undefined' }}</td><td>{{ s.status }}{% if s.reason %}: {{ s.reason }}{% endif %}</td></tr>{% endfor %}</table></section>
+{% endfor %}
 {% for data in bundle.metrics %}
 <h2>Snapshot comparison &middot; {{ data.metric.name }} &middot; {{ data.metric.aggregate }}</h2>
 <p class="badge">Reconciliation {{ data.summary.status }} · {{ 'Exact arithmetic' if data.summary.exact else 'Approximate floating-point arithmetic' }}</p>
