@@ -12,7 +12,7 @@ def demo(out, overwrite=False):
     stage = Path(tempfile.mkdtemp(prefix=".delta-", dir=out.parent))
     try:
         _write_demo(stage)
-        publish(stage, out)
+        publish(stage, out, overwrite)
     except duckdb.Error:
         raise InvestigationError("Could not generate demo inputs; check output location and available disk space") from None
     finally:

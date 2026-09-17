@@ -357,6 +357,60 @@ def test_demo_failure_preserves_bundle(tmp_path, monkeypatch):
     assert not list(tmp_path.glob('.delta-*'))
 
 
+@pytest.mark.parametrize('command', ['investigate', 'schema', 'validate', 'demo'])
+@pytest.mark.parametrize('initially_empty', [False, True])
+def test_publication_preserves_concurrent_output(tmp_path, monkeypatch, command, initially_empty):
+    import importlib
+    cfg = setup(tmp_path, [(1, 1, 'a')], [(1, 2, 'b')])
+    if command == 'schema':
+        settings = yaml.safe_load(cfg.read_text())
+        settings['schema'] = {'columns': {'missing': None}}
+        cfg.write_text(yaml.safe_dump(settings))
+    module_name = {'investigate': 'core', 'schema': 'core', 'validate': 'validation', 'demo': 'demo'}[command]
+    module = importlib.import_module('delta_detective.' + module_name)
+    original_publish = module.publish
+    out = tmp_path / 'out'
+    if initially_empty:
+        out.mkdir()
+
+    def concurrent_publish(stage, target, *args, **kwargs):
+        target.mkdir(exist_ok=True)
+        (target / 'concurrent.txt').write_text('Keep the other writer\'s output')
+        return original_publish(stage, target, *args, **kwargs)
+
+    monkeypatch.setattr(module, 'publish', concurrent_publish)
+    with pytest.raises(OSError):
+        if command == 'demo':
+            module.demo(out)
+        elif command == 'validate':
+            module.validate(cfg, out)
+        else:
+            module.investigate(cfg, out)
+    assert {p.name: p.read_text() for p in out.iterdir()} == {
+        'concurrent.txt': 'Keep the other writer\'s output'}
+    assert not list(tmp_path.glob('.delta-*'))
+
+
+def test_publication_accepts_empty_directory_without_directory_replacement(tmp_path, monkeypatch):
+    from delta_detective.core import publish
+
+    stage, out = tmp_path / 'stage', tmp_path / 'out'
+    stage.mkdir()
+    out.mkdir()
+    (stage / 'report.txt').write_text('Completed report')
+    original_replace = Path.replace
+
+    def replace_without_existing_directory(self, target):
+        if target.exists():
+            raise FileExistsError('Platform cannot replace an existing directory')
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, 'replace', replace_without_existing_directory)
+    publish(stage, out)
+    assert (out / 'report.txt').read_text() == 'Completed report'
+    assert not stage.exists()
+
+
 @pytest.mark.parametrize('suffix', ['csv', 'parquet'])
 @pytest.mark.parametrize('brackets_in_parent', [False, True])
 def test_glob_input_paths_rejected(tmp_path, suffix, brackets_in_parent):

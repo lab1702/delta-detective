@@ -54,7 +54,7 @@ def investigate(config, out, overwrite=False):
             for side in profiles:
                 if before[side] != profiles[side]['sha256'] or fingerprint(cfg[side]) != before[side]:
                     raise InvestigationError('Input changed during analysis; rerun with stable snapshots')
-            return publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements)
+            return publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements, overwrite)
         filter_scope = apply_filters(con, cfg, profiles, execute)
         validate_loaded(con, cfg, profiles, execute)
         a, b = (profiles[s]["schema"] for s in ("reference", "current"))
@@ -134,7 +134,7 @@ def investigate(config, out, overwrite=False):
         for filename, content in [("findings.json", dumps(data)), ("manifest.json", dumps(manifest)),
                                   ("analysis.sql", sql), ("report.html", render(cfg, data, checks, sql, dumps({"changes": schema_changes, "inputs": profiles})))]:
             (stage / filename).write_text(content, encoding="utf-8")
-        publish(stage, out)
+        publish(stage, out, overwrite)
         return data
     except duckdb.Error as exc:
         # Do not echo DuckDB's offending row/key values in default diagnostics.
@@ -153,16 +153,29 @@ def investigate(config, out, overwrite=False):
             shutil.rmtree(stage)
 
 
-def publish(stage, out):
+def publish(stage, out, overwrite=False, validate_existing=None):
     """Retain the previous bundle until the completed stage is in place."""
     backup = None
-    if out.exists():
+    if overwrite and out.exists():
         backup = Path(tempfile.mkdtemp(prefix=".delta-backup-", dir=out.parent))
         backup.rmdir()
         out.replace(backup)
+    elif not overwrite:
+        # Some platforms cannot replace even an empty directory. rmdir accepts
+        # only an empty destination and atomically refuses another writer's files.
+        try:
+            out.rmdir()
+        except FileNotFoundError:
+            pass
     try:
+        if backup is not None and validate_existing is not None:
+            # Check the directory actually moved aside, so a concurrent writer
+            # cannot substitute unrelated output after the initial validation.
+            validate_existing(backup)
+        # Without overwrite, rename atomically refuses a nonempty destination,
+        # including one created after prepare_output checked the path.
         stage.replace(out)
-    except OSError:
+    except (OSError, InvestigationError):
         if backup is not None:
             backup.replace(out)
         raise
@@ -171,7 +184,7 @@ def publish(stage, out):
         shutil.rmtree(backup, ignore_errors=True)
 
 
-def publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements):
+def publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements, overwrite=False):
     checks = ['Schema contract failed. Comparison, threshold rules, and raw exports were not run.']
     data = dict(execution_status='schema_contract_failed', schema_checks=schema_checks,
                 metrics=[], summary=None, findings=[], dimensions=[], reclassifications=[],
@@ -195,7 +208,7 @@ def publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements)
     for filename, content in [('findings.json', dumps(data)), ('manifest.json', dumps(manifest)),
                               ('analysis.sql', sql), ('report.html', render(cfg, data, checks, sql, dumps(profiles)))]:
         (stage / filename).write_text(content, encoding='utf-8')
-    publish(stage, out)
+    publish(stage, out, overwrite)
     return data
 
 

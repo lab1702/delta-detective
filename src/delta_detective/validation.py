@@ -29,18 +29,23 @@ TEMPLATE = '''<!doctype html><html lang="en"><meta charset="utf-8">
 <h2>Replay SQL</h2><pre>{{ sql }}</pre></html>'''
 
 
-def validate(config, out, overwrite=False, export_invalid_rows=False, limit=100):
-    if type(limit) is not int or limit <= 0:
-        raise InvestigationError('Evidence limit must be a positive integer')
-    cfg = load_config(config)
-    target = Path(out).resolve()
-    if target.is_dir() and any(target.iterdir()) and overwrite:
+def check_validation_output(target):
+    if target.is_dir() and any(target.iterdir()):
         try:
             previous = json.loads((target / 'manifest.json').read_text(encoding='utf-8'))
         except (OSError, ValueError):
             previous = {}
         if not isinstance(previous, dict) or previous.get('kind') != 'validation':
             raise InvestigationError('Validation output must be separate from investigation bundles; choose another directory')
+
+
+def validate(config, out, overwrite=False, export_invalid_rows=False, limit=100):
+    if type(limit) is not int or limit <= 0:
+        raise InvestigationError('Evidence limit must be a positive integer')
+    cfg = load_config(config)
+    target = Path(out).resolve()
+    if overwrite:
+        check_validation_output(target)
     target = prepare_output(target, overwrite, [config, cfg['reference'], cfg['current']])
     stage = Path(tempfile.mkdtemp(prefix='.delta-validation-', dir=target.parent))
     statements, checks, exports = [], [], []
@@ -162,7 +167,7 @@ def validate(config, out, overwrite=False, export_invalid_rows=False, limit=100)
             for name, content in [('validation.json', dumps(data)), ('manifest.json', dumps(manifest)),
                                   ('analysis.sql', sql), ('report.html', html)]:
                 (stage / name).write_text(content, encoding='utf-8')
-        publish(stage, target)
+        publish(stage, target, overwrite, validate_existing=check_validation_output)
         return data
     except duckdb.Error as exc:
         if 'Hive partition conflicts with stored column' in str(exc):

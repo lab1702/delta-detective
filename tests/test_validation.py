@@ -141,3 +141,27 @@ def test_input_mutation_prevents_publication(tmp_path, monkeypatch):
     with pytest.raises(InvestigationError, match='Input changed'):
         validate(path, tmp_path / 'validation')
     assert not (tmp_path / 'validation').exists()
+
+
+def test_overwrite_rechecks_the_actual_directory_before_publication(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    path = setup(tmp_path, [(1, 1, 'a')], [(1, 2, 'a')])
+    out = tmp_path / 'validation'
+    validate(path, out)
+    original_replace = Path.replace
+
+    def replace_with_concurrent_output(self, target):
+        if self == out:
+            # A different writer replaces the bundle after initial validation,
+            # immediately before this run moves the directory into its backup.
+            for child in out.iterdir():
+                child.unlink()
+            (out / 'unrelated.txt').write_text('Preserve this directory')
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, 'replace', replace_with_concurrent_output)
+    with pytest.raises(InvestigationError, match='separate'):
+        validate(path, out, overwrite=True)
+    assert {p.name: p.read_text() for p in out.iterdir()} == {'unrelated.txt': 'Preserve this directory'}
+    assert not list(tmp_path.glob('.delta-*'))
