@@ -406,6 +406,16 @@ def test_non_utf8_config_cli(tmp_path):
     assert not (tmp_path/'out').exists()
 
 
+def test_nul_input_path_cli(tmp_path):
+    cfg = setup(tmp_path, [], [], reference='bad\x00.csv')
+    result = subprocess.run([sys.executable, '-m', 'delta_detective.cli', 'investigate',
+                             str(cfg), '--out', str(tmp_path/'out')], capture_output=True, text=True)
+    assert result.returncode == 2
+    assert 'input paths must not contain NUL' in result.stderr
+    assert 'Traceback' not in result.stderr
+    assert not (tmp_path/'out').exists()
+
+
 @pytest.mark.parametrize('suffix', ['csv', 'parquet'])
 @pytest.mark.parametrize('partition_column', ['id', 'amount', 'category'])
 def test_parent_directories_do_not_override_input_values(tmp_path, suffix, partition_column):
