@@ -275,3 +275,54 @@ def test_standalone_html(tmp_path):
     assert 'url(' not in html
     for title in ['Metric reconciliation','Keys and selected-field differences','Independent dimension breakdowns','Selected-dimension reclassifications','Validation and schema','Executed SQL']:
         assert title in html
+
+
+@pytest.mark.parametrize('category_type,value', [
+    ('INTERVAL', '1 day'),
+    ('INTEGER[]', [1, 2]),
+    ('STRUCT(code INTEGER)', {'code': 1}),
+    ('DECIMAL(10,2)[]', [Decimal('1.25')]),
+])
+def test_unsupported_dimensions(tmp_path, category_type, value):
+    cfg = setup(tmp_path, [(1, 1, value)], [(1, 2, value)],
+                schema=f'id INTEGER, amount INTEGER, category {category_type}')
+    with pytest.raises(InvestigationError, match='must be categorical'):
+        investigate(cfg, tmp_path/'out')
+    assert not (tmp_path/'out').exists()
+
+
+def test_dimension_cancellation_tolerance(tmp_path):
+    from delta_detective.config import load_config
+    from delta_detective.loading import load_and_validate
+    from delta_detective.comparison import compare
+    cfg = load_config(setup(tmp_path, [], [(1, 1e16, 'a0'), (2, -1e16, 'b0'), (3, 1, 'a0')],
+                            schema='id INTEGER, amount DOUBLE, category VARCHAR'))
+    with duckdb.connect(config={'threads': 1}) as con:
+        profiles = load_and_validate(con, cfg, con.execute)
+        summary, dimensions, _ = compare(con, cfg, profiles, con.execute)
+    assert summary['current_total'] == 1
+    assert dimensions[0]['check']['residual'] == 1
+    assert dimensions[0]['check']['tolerance'] == 20000
+    assert dimensions[0]['check']['status'] == 'passed'
+
+
+@pytest.mark.parametrize('failure_point', ['backup', 'publish'])
+def test_failed_publication_preserves_previous_bundle(tmp_path, monkeypatch, failure_point):
+    cfg = demo(tmp_path/'demo')
+    out = tmp_path/'out'
+    investigate(cfg, out)
+    before = {p.name: p.read_bytes() for p in out.iterdir()}
+    original_replace = Path.replace
+
+    def fail_replace(self, target):
+        if ((failure_point == 'backup' and self == out)
+                or (failure_point == 'publish' and self.name.startswith('.delta-')
+                    and not self.name.startswith('.delta-backup-'))):
+            raise PermissionError('simulated publication failure')
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, 'replace', fail_replace)
+    with pytest.raises(PermissionError, match='simulated publication failure'):
+        investigate(cfg, out, overwrite=True)
+    assert {p.name: p.read_bytes() for p in out.iterdir()} == before
+    assert not list(tmp_path.glob('.delta-*'))

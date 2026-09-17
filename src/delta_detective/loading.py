@@ -1,4 +1,5 @@
 import hashlib
+import re
 from pathlib import Path
 from .config import InvestigationError
 
@@ -73,6 +74,8 @@ def load_and_validate(con, cfg, execute):
             raise InvestigationError(f"Unsupported key type {typ}; use exact scalar keys")
     for col in cfg["dimensions"]:
         typ = profiles["reference"]["schema"][col]
-        if typ != "VARCHAR" and typ != "BOOLEAN" and "INT" not in typ and not typ.startswith("DECIMAL("):
+        scalar_types = {"VARCHAR", "BOOLEAN", "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
+                        "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT"}
+        if typ not in scalar_types and not re.fullmatch(r"DECIMAL\(\d+,\d+\)", typ):
             raise InvestigationError(f"Dimension {col!r} must be categorical text, boolean, or exact numeric")
     return profiles

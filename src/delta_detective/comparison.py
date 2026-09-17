@@ -7,12 +7,13 @@ REL_TOL = 1e-12
 TOP_GROUPS = 50
 
 
-def check(reference, current, parts, approximate):
+def check(reference, current, parts, approximate, absolute_contributions=None):
     with localcontext() as ctx:
         ctx.prec = 100
         delta = current - reference
         residual = delta - sum(parts)
-        tolerance = max(ABS_TOL, REL_TOL * max(abs(reference), abs(current), sum(abs(p) for p in parts))) if approximate else 0
+        magnitude = sum(abs(p) for p in parts) if absolute_contributions is None else absolute_contributions
+        tolerance = max(ABS_TOL, REL_TOL * max(abs(reference), abs(current), magnitude)) if approximate else 0
         passed = abs(residual) <= tolerance
     if not passed:
         raise InvestigationError(f"Reconciliation failed: residual {residual}, tolerance {tolerance}")
@@ -86,9 +87,12 @@ def compare(con, cfg, profiles, execute):
           FROM {table}_ranked WHERE rank>{TOP_GROUPS} HAVING count(*)>0""")
         cur = con.execute(f"SELECT * EXCLUDE(rank) FROM {table}_display ORDER BY rank")
         rows = [dict(zip([c[0] for c in cur.description], row)) for row in cur.fetchall()]
-        total = con.execute(f"SELECT coalesce(sum(contribution),0) FROM {table}").fetchone()[0]
-        status = check(summary["reference_total"], summary["current_total"], [total], approximate)
-        check(summary["reference_total"], summary["current_total"], [r["contribution"] for r in rows], approximate)
+        # Compute the tolerance from all categories, including those folded into Other.
+        # Exact arithmetic needs no magnitude sum, which could itself overflow.
+        magnitude_sql = "coalesce(sum(abs(contribution)),0)" if approximate else "0"
+        total, magnitude = con.execute(f"SELECT coalesce(sum(contribution),0), {magnitude_sql} FROM {table}").fetchone()
+        status = check(summary["reference_total"], summary["current_total"], [total], approximate, magnitude)
+        check(summary["reference_total"], summary["current_total"], [r["contribution"] for r in rows], approximate, magnitude)
         breakdowns.append({"name": name, "rows": rows, "check": status, "evidence": table + "_display"})
         execute(f"""CREATE TABLE reclassification_{i} AS SELECT count(*) AS rows,
           count(*) FILTER (WHERE rv IS DISTINCT FROM cv) AS also_metric_changed,

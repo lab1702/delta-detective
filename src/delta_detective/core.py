@@ -64,10 +64,7 @@ def investigate(config, out, overwrite=False):
         for filename, content in [("findings.json", dumps(data)), ("manifest.json", dumps(manifest)),
                                   ("analysis.sql", sql), ("report.html", render(cfg, data, checks, sql, dumps({"changes": schema_changes, "inputs": profiles})))]:
             (stage / filename).write_text(content, encoding="utf-8")
-        if out.exists():
-            # The resolved output has been checked not to contain any source inputs.
-            shutil.rmtree(out)
-        stage.replace(out)
+        publish(stage, out)
         return data
     except duckdb.Error as exc:
         # Do not echo DuckDB's offending row/key values in default diagnostics.
@@ -82,3 +79,21 @@ def investigate(config, out, overwrite=False):
         con.close()
         if stage.exists():
             shutil.rmtree(stage)
+
+
+def publish(stage, out):
+    """Retain the previous bundle until the completed stage is in place."""
+    backup = None
+    if out.exists():
+        backup = Path(tempfile.mkdtemp(prefix=".delta-backup-", dir=out.parent))
+        backup.rmdir()
+        out.replace(backup)
+    try:
+        stage.replace(out)
+    except OSError:
+        if backup is not None:
+            backup.replace(out)
+        raise
+    if backup is not None:
+        # Publication succeeded. A locked backup must not turn success into failure.
+        shutil.rmtree(backup, ignore_errors=True)
