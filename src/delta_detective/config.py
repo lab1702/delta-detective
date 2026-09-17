@@ -95,7 +95,7 @@ def load_config(path):
     if len({m["name"] for m in metrics}) != len(metrics):
         raise InvestigationError("Metric names must be unique")
     validate_rules(cfg.setdefault("rules", []), {m["name"] for m in metrics},
-                   [[d] for d in cfg["dimensions"]] + cfg["dimension_groups"])
+                   [[d] for d in cfg["dimensions"]] + cfg["dimension_groups"], cfg['compare_fields'])
     cfg.setdefault("report", {})
     fields(cfg["report"], ["include_raw_rows", "evidence_exports"], [], "report")
     cfg["report"].setdefault("include_raw_rows", False)
@@ -161,20 +161,35 @@ def threshold_number(value):
     return number
 
 
-def validate_rules(rules, metric_names, groups=()):
+FIELD_COUNTS = {'changed_rows', 'unchanged_rows', 'became_null', 'from_null', 'both_null',
+                'value_changed_rows', 'became_blank', 'from_blank', 'increased_rows', 'decreased_rows'}
+FIELD_PERCENTAGES = {'percent_' + name.removesuffix('_rows'): name for name in FIELD_COUNTS}
+
+
+def validate_rules(rules, metric_names, groups=(), compare_fields=()):
     if not isinstance(rules, list):
         raise InvestigationError("rules must be a list")
     seen = set()
     for rule in rules:
-        fields(rule, ["name", "metric", "measure", "min", "max", "group_by", "where"], ["name", "metric", "measure"], "rule")
+        fields(rule, ["name", "metric", "field", "measure", "min", "max", "group_by", "where"], ["name", "measure"], "rule")
         name = rule["name"]
         if not isinstance(name, str) or not name.strip() or name in seen:
             raise InvestigationError("Rule names must be unique, nonempty text")
         seen.add(name)
-        if not isinstance(rule["metric"], str) or rule["metric"] not in metric_names:
-            raise InvestigationError("Rule metric must name a configured metric")
-        if not isinstance(rule["measure"], str) or rule["measure"] not in RULE_MEASURES:
-            raise InvestigationError(f"Rule measure must be one of {sorted(RULE_MEASURES)}")
+        if ('metric' in rule) == ('field' in rule):
+            raise InvestigationError('Rule requires exactly one of metric or field')
+        if 'field' in rule:
+            if not isinstance(rule['field'], str) or rule['field'] not in compare_fields:
+                raise InvestigationError('Rule field must name a configured compare_fields column')
+            if 'group_by' in rule or 'where' in rule:
+                raise InvestigationError('Field rules apply to all matched records; group_by and where are not supported')
+            measures = FIELD_COUNTS | FIELD_PERCENTAGES.keys()
+        else:
+            if not isinstance(rule["metric"], str) or rule["metric"] not in metric_names:
+                raise InvestigationError("Rule metric must name a configured metric")
+            measures = RULE_MEASURES
+        if not isinstance(rule["measure"], str) or rule["measure"] not in measures:
+            raise InvestigationError(f"Rule measure must be one of {sorted(measures)}")
         bounds = {k: threshold_number(rule[k]) for k in ("min", "max") if k in rule}
         if not bounds or ("min" in bounds and "max" in bounds and bounds["min"] > bounds["max"]):
             raise InvestigationError("Rule requires min and/or max, with min <= max")

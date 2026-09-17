@@ -51,7 +51,10 @@ def main(argv=None):
             for rule in data["rule_checks"]["results"]:
                 bounds = ", ".join(f"{key}={rule[key]}" for key in ("min", "max") if key in rule)
                 observed = rule['observed'] if rule['observed'] is not None else 'undefined'
-                print(f"{rule['name']}: {rule['status']} ({rule['metric']}.{rule['measure']}={observed}; {bounds})")
+                target = rule.get('field', rule.get('metric'))
+                print(f"{rule['name']}: {rule['status']} ({target}.{rule['measure']}={observed}; {bounds})")
+                if 'field' in rule:
+                    print(f"  {rule['numerator']} of {rule['denominator']} matched records; unit={rule['unit']}")
                 if 'segment_counts' in rule:
                     print(f"  Segments: {rule['segment_counts']}; omitted from display: {rule['omitted_segments']}")
                     for segment in rule['segments']:

@@ -92,7 +92,7 @@ def investigate(config, out, overwrite=False):
         data['field_changes'] = field_changes
         data['schema_checks'] = schema_checks
         data['execution_status'] = 'success'
-        data["rule_checks"] = evaluate_rules(cfg["rules"], results, con, cfg, execute)
+        data["rule_checks"] = evaluate_rules(cfg["rules"], results, con, cfg, execute, field_changes=field_changes)
         summary = data["summary"]
         replay = []
         if cfg['compare_fields']:

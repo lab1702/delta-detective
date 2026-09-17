@@ -273,10 +273,62 @@ one compared field. All raw exports, including `include_raw_rows`, include the
 selected `rfN`/`cfN` columns when fields are configured. The manifest records their
 column order. CSV null/empty rendering has the same ambiguity as other raw exports;
 SQL replay retains typed evidence. Field changes do not trigger threshold rules
-or change exit codes by themselves.
+or change exit codes by themselves; use field rules below to enforce limits.
 
 Add `compare_fields` to YAML after using `init`; the wizard does not select these
 fields yet. Only the current run's two snapshots are needed.
+
+### Field-level threshold rules
+
+Rules can target a compared field using `field` instead of `metric`:
+
+```yaml
+compare_fields: [status, delivery_date, description]
+rules:
+  - name: At most two percent of statuses change
+    field: status
+    measure: percent_changed
+    max: 2
+  - name: Delivery dates must not become null
+    field: delivery_date
+    measure: became_null
+    max: 0
+  - name: Descriptions must not become blank
+    field: description
+    measure: became_blank
+    max: 0
+  - name: At most ten delivery dates move later
+    field: delivery_date
+    measure: increased_rows
+    max: 10
+```
+
+A rule must specify exactly one of `field` or `metric`. Field targets must be in
+`compare_fields`. They apply to all matched keys, once per investigation regardless
+of the number of metrics; `group_by` and `where` are not supported on field rules.
+
+Count measures are `changed_rows`, `unchanged_rows`, `became_null`, `from_null`,
+`both_null`, `value_changed_rows`, `became_blank`, `from_blank`, `increased_rows`,
+and `decreased_rows`. Each has a percentage form: prefix with `percent_` and omit
+the `_rows` suffix, for example `percent_changed`, `percent_became_null`,
+`percent_value_changed`, and `percent_increased`. Blank measures require text;
+direction measures require numeric or date/time fields. Invalid combinations
+are rejected rather than silently treated as zero.
+
+All percentages use **all matched records** as their denominator, including
+unchanged and null-valued records, and exclude added/removed records. Percentage
+bounds use 2 for 2%, with the same 100-digit decimal calculation precision as other
+reported percentages. An empty matched population yields zero for count rules
+and undefined for percentage rules. Bounds are inclusive; null/blank overlap and
+stored-value equality follow the field comparison semantics above.
+
+Field rule results in `rule_checks` include `field`, `observed`, `numerator`,
+`denominator`, `denominator_basis`, `unit`, bounds, status, and evidence pointers
+to `main.field_N` and `main.field_overview`. HTML and CLI also show the count and
+matched-record denominator. Failed or undefined field rules use the existing
+overall failure status and opt-in `--fail-on-rule-violation` exit code 3 after the
+bundle is saved. Raw field values remain excluded unless exports are enabled.
+The `init` wizard still authors metric rules; add field rules in YAML.
 
 ### Category movement tables
 

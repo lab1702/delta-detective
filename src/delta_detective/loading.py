@@ -1,7 +1,7 @@
 import hashlib
 import re
 from pathlib import Path
-from .config import InvestigationError, configured_metrics, selected_dimensions
+from .config import InvestigationError, configured_metrics, selected_dimensions, FIELD_PERCENTAGES
 
 
 def ident(value):
@@ -99,6 +99,14 @@ def validate_loaded(con, cfg, profiles, execute):
         if typ in ('FLOAT', 'DOUBLE'):
             for side in ('reference', 'current'):
                 execute(f"SELECT CASE WHEN EXISTS (SELECT 1 FROM {side} WHERE NOT isfinite({ident(col)})) THEN error('{side}: nonfinite comparison field') ELSE true END")
+    for rule in cfg.get('rules', []):
+        if 'field' not in rule:
+            continue
+        typ = profiles['reference']['schema'][rule['field']]
+        count = FIELD_PERCENTAGES.get(rule['measure'], rule['measure'])
+        if ((count in ('became_blank', 'from_blank') and typ != 'VARCHAR')
+                or (count in ('increased_rows', 'decreased_rows') and typ in ('VARCHAR', 'BOOLEAN'))):
+            raise InvestigationError(f"Field rule measure {rule['measure']!r} is not supported for type {typ}")
     return profiles
 
 

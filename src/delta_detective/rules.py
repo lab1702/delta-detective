@@ -1,13 +1,17 @@
 """Evaluate user policy independently of arithmetic/data validation."""
 from decimal import Decimal, localcontext
 
-from .config import threshold_number, InvestigationError, selected_dimensions
+from .config import threshold_number, InvestigationError, selected_dimensions, FIELD_PERCENTAGES
 
 
-def evaluate_rules(rules, results, con=None, cfg=None, execute=None):
+def evaluate_rules(rules, results, con=None, cfg=None, execute=None, field_changes=None):
     metrics = {item["metric"]["name"]: item for item in results}
     evaluated = []
     for index, rule in enumerate(rules):
+        if 'field' in rule:
+            field = next(f for f in field_changes['fields'] if f['name'] == rule['field'])
+            evaluated.append(evaluate_field_rule(rule, field))
+            continue
         item = metrics[rule["metric"]]
         if "group_by" in rule:
             evaluated.append(evaluate_segments(rule, item, index, con, cfg, execute))
@@ -44,6 +48,27 @@ def evaluate_rules(rules, results, con=None, cfg=None, execute=None):
     return {"status": ("not_configured" if not evaluated else
                        "failed" if any(r["status"] != "passed" for r in evaluated) else "passed"),
             "results": evaluated}
+
+
+def evaluate_field_rule(rule, field):
+    measure = rule['measure']
+    numerator = field[FIELD_PERCENTAGES.get(measure, measure)]
+    denominator = field['matched_rows']
+    percentage = measure in FIELD_PERCENTAGES
+    with localcontext() as ctx:
+        ctx.prec = 100
+        value = (Decimal(numerator) * 100 / denominator if denominator else None) if percentage else numerator
+    bounds = {k: threshold_number(rule[k]) for k in ('min', 'max') if k in rule}
+    status, reason = 'passed', None
+    if value is None:
+        status, reason = 'undefined', 'Undefined: no matched records.'
+    elif any((value < bound if k == 'min' else value > bound) for k, bound in bounds.items()):
+        status, reason = 'failed', 'Observed value is outside the inclusive bounds.'
+    return dict(name=rule['name'], field=rule['field'], measure=measure, observed=value,
+                **bounds, numerator=numerator, denominator=denominator,
+                denominator_basis='all matched records', unit='percent' if percentage else 'rows',
+                status=status, reason=reason, exact=True,
+                evidence=f"analysis.sql: {field['evidence']}", denominator_evidence='analysis.sql: main.field_overview')
 
 
 def evaluate_segments(rule, item, index, con, cfg, execute):
