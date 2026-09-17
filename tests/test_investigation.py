@@ -393,3 +393,14 @@ def test_nonfinite_evidence_rejected():
     from delta_detective.findings import dumps
     with pytest.raises(InvestigationError, match='nonfinite result'):
         dumps({'amount': float('inf')})
+
+
+def test_non_utf8_config_cli(tmp_path):
+    cfg = tmp_path/'config.yaml'
+    cfg.write_text('mode: snapshots', encoding='utf-16')
+    result = subprocess.run([sys.executable, '-m', 'delta_detective.cli', 'investigate',
+                             str(cfg), '--out', str(tmp_path/'out')], capture_output=True, text=True)
+    assert result.returncode == 2
+    assert 'Cannot read configuration' in result.stderr
+    assert 'Traceback' not in result.stderr
+    assert not (tmp_path/'out').exists()

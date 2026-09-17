@@ -39,7 +39,7 @@ def load_config(path):
     path = Path(path).resolve()
     try:
         cfg = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueLoader)
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise InvestigationError(f"Cannot read configuration: {exc}") from exc
     fields(cfg, ["mode", "reference", "current", "key", "metric", "dimensions", "report"],
            ["mode", "reference", "current", "key", "metric"], "configuration")
