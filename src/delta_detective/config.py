@@ -43,7 +43,7 @@ def load_config(path):
         cfg = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise InvestigationError(f"Cannot read configuration: {exc}") from exc
-    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema", "compare_fields", "csv", "column_mapping", "filters"],
+    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema", "compare_fields", "csv", "column_mapping", "filters", "field_tolerances"],
            ["mode", "reference", "current", "key"], "configuration")
     if cfg["mode"] != "snapshots":
         raise InvestigationError("Only mode: snapshots is supported")
@@ -69,6 +69,7 @@ def load_config(path):
     names(cfg["key"], "key", True)
     cfg.setdefault('compare_fields', [])
     names(cfg['compare_fields'], 'compare_fields')
+    validate_field_tolerances(cfg)
     if set(cfg['key']) & set(cfg['compare_fields']):
         raise InvestigationError('Key columns cannot be compare_fields')
     cfg.setdefault("dimensions", [])
@@ -123,6 +124,23 @@ def load_config(path):
     validate_column_mapping(cfg)
     validate_filters(cfg.get('filters', []))
     return cfg
+
+
+def validate_field_tolerances(cfg):
+    tolerances = cfg.get('field_tolerances', {})
+    if not isinstance(tolerances, dict):
+        raise InvestigationError('field_tolerances must be a mapping')
+    for column, spec in tolerances.items():
+        if column not in cfg.get('compare_fields', []):
+            raise InvestigationError('Tolerance field must name a compare_fields column')
+        fields(spec, ['absolute'], ['absolute'], 'field tolerance')
+        value = threshold_number(spec['absolute'])
+        if value < 0:
+            raise InvestigationError('Absolute field tolerance must be nonnegative')
+        scale = max(0, -value.as_tuple().exponent)
+        if max(1, max(0, value.adjusted() + 1) + scale) > 38:
+            raise InvestigationError('Absolute field tolerance must fit decimal precision 38')
+        spec['absolute'] = format(value, 'f')
 
 
 def validate_filters(filters):

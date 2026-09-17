@@ -13,7 +13,7 @@ def run(tmp_path, answers):
     messages = []
     pending = iter(answers)
     def ask(prompt):
-        if prompt.startswith('Configure input parsing,'):
+        if prompt.startswith(('Configure input parsing,', 'Configure numeric field tolerances?')):
             return ''
         answer = next(pending)
         if isinstance(answer, tuple):
@@ -103,7 +103,7 @@ def test_advanced_cancellation_after_choices_writes_nothing(tmp_path):
     setup(tmp_path, [], [])
     answers = iter(['1', '1', '', '', '', 'y'])
     def ask(prompt):
-        if prompt.startswith('Configure input parsing,'):
+        if prompt.startswith(('Configure input parsing,', 'Configure numeric field tolerances?')):
             return ''
         try:
             return next(answers)

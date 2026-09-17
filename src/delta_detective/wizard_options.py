@@ -4,8 +4,9 @@ from decimal import Decimal
 
 import duckdb
 
-from .config import FIELD_COUNTS, FIELD_PERCENTAGES, RULE_MEASURES, InvestigationError, threshold_number
+from .config import FIELD_COUNTS, FIELD_PERCENTAGES, RULE_MEASURES, InvestigationError, threshold_number, validate_field_tolerances
 from .loading import comparison_field_type, ident
+from .tolerances import numeric_type
 
 
 def yes_no(prompt, ask, tell):
@@ -70,6 +71,24 @@ def advanced_options(con, schemas, common, key, ask, tell, choose):
     compared = [eligible[i] for i in choose('Compared field numbers (Enter for none): ',
                 [f'{c!r} ({common[c]})' for c in eligible], ask, tell)] if eligible else []
     options['compare_fields'] = compared
+    numeric_fields = [c for c in compared if numeric_type(common[c])]
+    if numeric_fields and yes_no('Configure numeric field tolerances? [y/N]: ', ask, tell):
+        tell('Absolute tolerances affect field changes, field rules, and field exports only. Metric totals remain exact.')
+        selected = choose('Tolerance field numbers (Enter for none): ', [repr(c) for c in numeric_fields], ask, tell)
+        tolerances = {}
+        for i in selected:
+            column = numeric_fields[i]
+            while True:
+                spec = {'absolute': ask(f'Absolute tolerance for {column!r} (nonnegative; e.g. 0.01): ').strip()}
+                try:
+                    validate_field_tolerances({'compare_fields': compared, 'field_tolerances': {column: spec}})
+                except InvestigationError as exc:
+                    tell(str(exc) + '; please enter the tolerance again.')
+                else:
+                    tolerances[column] = spec
+                    break
+        if tolerances:
+            options['field_tolerances'] = tolerances
     tell('Raw exports contain record keys and selected before/after values. Leave export selections blank to keep them disabled.')
     kinds = ['all', 'added', 'removed', 'changed', 'moved', 'largest_changes'] + (['field_changed'] if compared else [])
     selected = choose('Raw export numbers (Enter for none): ', kinds, ask, tell)

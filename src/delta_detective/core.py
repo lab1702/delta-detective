@@ -11,6 +11,7 @@ from .report import render
 from .rules import evaluate_rules
 from .schema import check_schema
 from .fields import compare_fields
+from .tolerances import any_field_changed
 from .rule_exports import export_rule_evidence
 from .summary import build_summary
 from .filtering import apply_filters, SCOPE_NOTE
@@ -205,7 +206,8 @@ def export_evidence(con, execute, cfg, stage, metric_index, metric_count):
         else:
             changed_dimensions = " OR ".join(
                 f"rd{i} IS DISTINCT FROM cd{i}" for i in range(len(selected_dimensions(cfg)))) or "false"
-            changed_fields = ' OR '.join(f'rf{i} IS DISTINCT FROM cf{i}' for i in range(len(cfg['compare_fields']))) or 'false'
+            schema = {r[0]: r[1] for r in con.execute('DESCRIBE main.reference').fetchall()}
+            changed_fields = any_field_changed(cfg, schema)
             predicates = {"added": "rp IS NULL", "removed": "cp IS NULL",
                           "changed": "rp AND cp AND rv IS DISTINCT FROM cv",
                           "moved": f"rp AND cp AND ({changed_dimensions})",

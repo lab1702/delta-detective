@@ -1,26 +1,12 @@
 """Stream opt-in supporting rows for failed rules without retaining raw rows."""
 from .config import FIELD_PERCENTAGES, selected_dimensions
 from .loading import literal
-
-
-def field_predicate(measure, before, after):
-    count = FIELD_PERCENTAGES.get(measure, measure)
-    return {
-        'changed_rows': f'{before} IS DISTINCT FROM {after}',
-        'unchanged_rows': f'{before} IS NOT DISTINCT FROM {after}',
-        'became_null': f'{before} IS NOT NULL AND {after} IS NULL',
-        'from_null': f'{before} IS NULL AND {after} IS NOT NULL',
-        'both_null': f'{before} IS NULL AND {after} IS NULL',
-        'value_changed_rows': f'{before} IS NOT NULL AND {after} IS NOT NULL AND {before} IS DISTINCT FROM {after}',
-        'became_blank': f"{after} = '' AND {before} IS DISTINCT FROM ''",
-        'from_blank': f"{before} = '' AND {after} IS DISTINCT FROM ''",
-        'increased_rows': f'{after} > {before}',
-        'decreased_rows': f'{after} < {before}',
-    }[count]
+from .tolerances import conditions_for
 
 
 def export_rule_evidence(con, cfg, results, checks, stage, execute):
     metrics = {r['metric']['name']: r for r in results}
+    schema = {r[0]: r[1] for r in con.execute('DESCRIBE main.reference').fetchall()}
     exports = []
     for i, (rule, result) in enumerate(zip(cfg['rules'], checks['results'])):
         if 'export' not in rule:
@@ -32,7 +18,7 @@ def export_rule_evidence(con, cfg, results, checks, stage, execute):
         if 'field' in rule:
             ns = 'main'
             j = cfg['compare_fields'].index(rule['field'])
-            predicate = 'j.rp AND j.cp AND (' + field_predicate(measure, f'j.rf{j}', f'j.cf{j}') + ')'
+            predicate = 'j.rp AND j.cp AND (' + conditions_for(cfg, rule['field'], f'j.rf{j}', f'j.cf{j}', schema[rule['field']])[FIELD_PERCENTAGES.get(measure, measure)] + ')'
             selection = 'Matched records counted by the field measure (the percentage numerator when applicable).'
         else:
             ns = metrics[rule['metric']]['sql_schema']

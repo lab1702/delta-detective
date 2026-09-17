@@ -2,6 +2,7 @@ import hashlib
 import re
 from pathlib import Path
 from .config import InvestigationError, configured_metrics, selected_dimensions, FIELD_PERCENTAGES, identifier_key
+from .tolerances import numeric_type
 
 
 def ident(value):
@@ -97,6 +98,10 @@ def load_and_validate(con, cfg, execute):
 
 
 def validate_loaded(con, cfg, profiles, execute):
+    for name in cfg.get('field_tolerances', {}):
+        for side in profiles:
+            if not numeric_type(profiles[side]['schema'].get(name, '')):
+                raise InvestigationError(f'Field tolerance requires a numeric comparison field: {name!r}')
     metrics = configured_metrics(cfg)
     required = cfg["key"] + selected_dimensions(cfg) + cfg.get('compare_fields', []) + [m["column"] for m in metrics if m["aggregate"] == "sum"]
     for side in ("reference", "current"):

@@ -102,6 +102,9 @@ The expanded menus let you:
   extra columns. Inferred types are suggestions, not a guarantee of correctness.
 - Choose supported non-key comparison fields. Nonfinite floating-point fields
   are excluded, while null-valued fields remain available.
+- Optionally set absolute tolerances for selected numeric comparison fields.
+  Enter skips tolerances and preserves exact comparison. Invalid or negative
+  bounds prompt for another value; decimal text is preserved exactly.
 - Enable full or focused raw exports and set positive row limits for focused
   selections. Enter leaves all exports disabled. Full exports include all rows.
 - Choose an overall metric, a configured dimension/group, or a compared field as
@@ -388,8 +391,9 @@ to preserve a distinct empty-string value.
 Numeric fields report increases/decreases; date/time fields use the same counters
 for later/earlier values. Direction counts exclude null transitions. Text and
 boolean fields have no direction counters. Equality is null-safe and compares
-stored values without trimming, case folding, or numeric tolerance, including for
-FLOAT/DOUBLE. Nonfinite floating-point comparison fields are rejected; nulls are
+stored values without trimming or case folding. Numeric comparisons are exact
+unless an absolute field tolerance is configured, including for FLOAT/DOUBLE.
+Nonfinite floating-point comparison fields are rejected; nulls are
 allowed. Fields must exist with exactly matching types in both snapshots.
 Supported types are text, boolean, numeric, date, and time/timestamp types;
 nested values and other types are rejected. Keys cannot be compared fields.
@@ -419,6 +423,48 @@ or change exit codes by themselves; use field rules below to enforce limits.
 
 Select comparison fields through the expanded `init` options or directly in YAML.
 Only the current run's two snapshots are needed.
+
+### Numeric field tolerances
+
+Use `field_tolerances` to ignore small numeric differences in selected comparison
+fields while preserving the original values and metric totals:
+
+```yaml
+compare_fields: [unit_price, status]
+field_tolerances:
+  unit_price:
+    absolute: "0.01"
+```
+
+Each tolerance must name a numeric `compare_fields` column using its mapped name.
+Only an `absolute` bound is supported. It must be finite, nonnegative, and fit
+decimal precision 38. Quote decimal values to avoid YAML floating-point rounding.
+Omitting a tolerance keeps exact comparison; zero also keeps exact comparison.
+
+For two non-null values, a difference **at or below** the absolute bound counts
+as unchanged. Per-field results split `unchanged_rows` into `exact_match_rows`
+(including both-null pairs) and `within_tolerance_rows` (distinct, non-null values
+within the bound). Null-to-value and value-to-null transitions always count as
+changes. `value_changed_rows`, increases/decreases, the overall changed-record
+count, and field change percentages use the same tolerance-aware definition.
+
+Existing field threshold measures and their supporting-record exports follow
+these definitions, as does the general `field_changed` export. An unchanged-row
+rule includes both exact matches and differences within tolerance. The new exact
+and within-tolerance counters are informational, not additional rule measures.
+
+Metric totals, reconciliation, metric-based rules, `changed`/`largest_changes`
+exports, and dimension movements remain unaffected, even if the same column is
+also a metric or dimension. Before/after values in raw evidence are never rounded
+or replaced. Integer/decimal tolerance comparisons use exact arithmetic, including
+wide values whose subtraction would overflow the source type; FLOAT/DOUBLE
+comparisons retain approximate floating-point semantics.
+
+The report displays each configured bound and both unchanged counters. Findings
+and manifest JSON include `absolute_tolerance` per field (null for exact default),
+and the manifest configuration and replay SQL retain the chosen policy. The
+expanded wizard offers tolerance setup after numeric comparison fields are
+selected. Each run remains standalone and DuckDB resource defaults are unchanged.
 
 ### Field-level threshold rules
 
