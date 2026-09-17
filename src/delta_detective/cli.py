@@ -12,6 +12,8 @@ def main(argv=None):
         sub = commands.add_parser(name)
         if name == "investigate":
             sub.add_argument("config")
+            sub.add_argument("--fail-on-rule-violation", action="store_true",
+                             help="Exit 3 after writing the bundle if a rule fails or is undefined.")
         sub.add_argument("--out", required=True)
         sub.add_argument("--overwrite", action="store_true")
     args = parser.parse_args(argv)
@@ -29,6 +31,13 @@ def main(argv=None):
                     print(f"{kind}: {result[kind+'_rows']} rows; contribution {result[kind+'_contribution']}")
                 print(f"Reconciliation: {result['status']} ({'exact' if result['exact'] else 'approximate'}), residual {result['residual']}")
             print(f"Report: {args.out}/report.html")
+            print(f"Threshold rules: {data['rule_checks']['status']}")
+            for rule in data["rule_checks"]["results"]:
+                bounds = ", ".join(f"{key}={rule[key]}" for key in ("min", "max") if key in rule)
+                observed = rule['observed'] if rule['observed'] is not None else 'undefined'
+                print(f"{rule['name']}: {rule['status']} ({rule['metric']}.{rule['measure']}={observed}; {bounds})")
+            if args.fail_on_rule_violation and data["rule_checks"]["status"] == "failed":
+                return 3
         return 0
     except (InvestigationError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

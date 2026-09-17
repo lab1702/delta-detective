@@ -5,6 +5,10 @@ TEMPLATE = """<!doctype html><html lang="en"><meta charset="utf-8">
 <style>body{font:16px/1.55 system-ui,sans-serif;color:#172b37;max-width:1100px;margin:40px auto;padding:0 24px;background:#fafbfc}h1,h2{line-height:1.2}table{border-collapse:collapse;width:100%;margin:18px 0;background:white}th,td{padding:9px 12px;border-bottom:1px solid #dce3e8;text-align:left;overflow-wrap:anywhere}th{background:#edf2f5}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}small{color:#456}section{margin:34px 0}.badge{padding:8px;background:#e5f2ed}details{margin:15px 0}</style>
 <h1>Delta detective</h1>
 {% set bundle = data %}
+<section><h2>Threshold rules: {{ bundle.rule_checks.status }}</h2>
+<p>Rules flag changes for review; they do not establish errors or operational causes. Bounds are inclusive. Undefined measurements do not pass. Floating-point metrics retain approximate arithmetic; no reconciliation tolerance is applied to rule bounds.</p>
+{% if bundle.rule_checks.results %}<table><tr><th>Rule</th><th>Metric / measure</th><th>Observed</th><th>Minimum</th><th>Maximum</th><th>Result</th></tr>
+{% for r in bundle.rule_checks.results %}<tr><td>{{ r.name }}</td><td>{{ r.metric }} / {{ r.measure }}</td><td>{{ r.observed if r.observed is not none else 'undefined' }}</td><td>{{ r.min if 'min' in r else 'none' }}</td><td>{{ r.max if 'max' in r else 'none' }}</td><td>{{ r.status }}{% if r.reason %}: {{ r.reason }}{% endif %}</td></tr>{% endfor %}</table>{% else %}<p>No threshold rules configured.</p>{% endif %}</section>
 {% for data in bundle.metrics %}
 <h2>Snapshot comparison &middot; {{ data.metric.name }} &middot; {{ data.metric.aggregate }}</h2>
 <p class="badge">Reconciliation {{ data.summary.status }} · {{ 'Exact arithmetic' if data.summary.exact else 'Approximate floating-point arithmetic' }}</p>

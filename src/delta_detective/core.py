@@ -8,6 +8,7 @@ from .loading import load_and_validate, fingerprint, literal
 from .comparison import compare
 from .findings import build_findings, dumps, LIMITATIONS
 from .report import render
+from .rules import evaluate_rules
 
 
 def prepare_output(out, overwrite, inputs=()):
@@ -75,6 +76,7 @@ def investigate(config, out, overwrite=False):
         data = dict(results[0])  # Legacy top-level fields refer to the first metric.
         data["metrics"] = results
         data["evidence_exports"] = evidence
+        data["rule_checks"] = evaluate_rules(cfg["rules"], results)
         summary = data["summary"]
         replay = []
         for item in results:
@@ -87,6 +89,7 @@ def investigate(config, out, overwrite=False):
                     "created_utc": datetime.now(timezone.utc).isoformat(), "configuration": cfg,
                     "inputs": profiles, "execution_status": "success", "reconciliation": {k: summary[k] for k in ("status", "exact", "residual", "tolerance")},
                     "validation": checks, "assumptions_and_limitations": LIMITATIONS,
+                    "rule_checks": data["rule_checks"],
                     "metric_reconciliations": [{"name": item["metric"]["name"], "sql_schema": item["sql_schema"],
                         **{k: item["summary"][k] for k in ("status", "exact", "residual", "tolerance")}} for item in results],
                     "raw_evidence": {"included": bool(evidence), "exports": evidence, "selected_dimensions": selected_dimensions(cfg),

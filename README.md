@@ -27,7 +27,9 @@ and analysis details, with no external resources. Output directories must be emp
 or absent; use `--overwrite` to explicitly replace an existing bundle. An output
 directory cannot contain an input or the configuration. A failed investigation
 leaves a prior bundle untouched and exits nonzero. Finding differences is success
-(exit 0), not an execution error. CLI input/execution errors exit 2.
+(exit 0), not an execution error. CLI input/execution errors exit 2. With
+`--fail-on-rule-violation`, failed or undefined threshold rules exit 3 after the
+completed bundle is written.
 
 In a restricted workspace where the OS temporary directory is inaccessible, run
 `python -m pytest -q --basetemp .test-tmp-local` with a fresh dedicated test directory.
@@ -126,6 +128,78 @@ and so on. With multiple metrics, each filename starts with its zero-based metri
 index, such as `metric_0_removed_rows.csv`. `include_raw_rows: true` independently
 adds the full `raw_rows.csv` export (with the same prefix rule). The report and
 manifest list every exported file, metric, selection, limit, and row count.
+
+### Threshold rules
+
+Add optional `rules` to a comparison configuration to flag changes that require
+review. Each rule targets a configured metric by name and has an inclusive `min`,
+`max`, or both. For example, using the `net_sales` and `orders` metrics above:
+
+```yaml
+rules:
+  - name: Sales change within five percent
+    metric: net_sales
+    measure: abs_percent_change
+    max: 5
+  - name: At most one percent of orders removed
+    metric: orders
+    measure: removed_percent
+    max: 1
+  - name: Expected order count
+    metric: orders
+    measure: current_rows
+    min: 3
+    max: 10
+```
+
+| Measure | Observed value |
+| --- | --- |
+| `delta` | Signed current total minus reference total |
+| `abs_delta` | Magnitude of that total change, in metric units |
+| `percent_change` | Signed `100 * delta / reference_total` |
+| `abs_percent_change` | Magnitude of percentage change |
+| `current_total` | Current metric total (sum or count) |
+| `current_rows` | Number of keys in the current snapshot |
+| `added_rows` | Number of current-only keys |
+| `removed_rows` | Number of reference-only keys |
+| `removed_percent` | `100 * removed_rows / reference_rows` |
+
+Percentages use percentage points: `max: 5` means 5%, not 0.05%. Signed percentage
+change retains the sign of the reference total; use `abs_percent_change` to bound
+the magnitude regardless of direction. Percentage change is undefined when the
+reference total is zero, even when both totals are zero. Removal percentage is
+undefined when the reference has no rows. Undefined rules do not pass.
+
+Rules appear in the CLI, HTML report, and `rule_checks` in both `findings.json`
+and `manifest.json`. Each result includes the observed value, configured bounds,
+status (`passed`, `failed`, or `undefined`), reason when applicable, and evidence
+table. The overall status is `not_configured` for no rules, `passed` when every
+rule passes, and `failed` when any rule fails or is undefined. A policy failure
+does not change arithmetic reconciliation or the manifest's successful execution
+status, and the full evidence bundle is still published.
+
+By default, rule failures are informational. To use the rules as a local or
+external pipeline check:
+
+```sh
+delta-detective investigate comparison.yaml --out investigation --fail-on-rule-violation
+```
+
+Exit codes are 0 for successful execution (and, with the flag, passing or absent
+rules), 2 for configuration/input/execution errors, and 3 for failed or undefined
+rules when the flag is set. The Python API always returns completed results on
+policy failure; inspect `findings["rule_checks"]`. No scheduler or GitHub Actions
+workflow is installed or required.
+
+Rule names must be unique and nonempty. Bounds must be finite numbers or numeric
+strings, with `min <= max`. Quote high-precision decimal bounds, for example
+`max: "0.00000000000000000001"`, to avoid YAML floating-point rounding. Comparisons
+use decimal representations of observed results; percentages use the same
+100-digit decimal calculation precision as the report. FLOAT/DOUBLE measurements
+remain approximate. Rule bounds have no implicit tolerance; arithmetic
+reconciliation tolerance does not relax policy limits. Rules flag observed
+changes, not proven errors or operational causes. SQL replay reproduces the
+underlying measurements; it does not reevaluate Python threshold rules.
 
 Selected columns must have exactly matching DuckDB types across snapshots.
 Floating-point and nested key types are rejected. Dimensions accept strings,

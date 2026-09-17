@@ -1,4 +1,5 @@
 from pathlib import Path
+from decimal import Decimal, InvalidOperation
 import yaml
 
 
@@ -41,7 +42,7 @@ def load_config(path):
         cfg = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise InvestigationError(f"Cannot read configuration: {exc}") from exc
-    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report"],
+    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules"],
            ["mode", "reference", "current", "key"], "configuration")
     if cfg["mode"] != "snapshots":
         raise InvestigationError("Only mode: snapshots is supported")
@@ -69,6 +70,7 @@ def load_config(path):
         validate_metric(metric, cfg["key"])
     if len({m["name"] for m in metrics}) != len(metrics):
         raise InvestigationError("Metric names must be unique")
+    validate_rules(cfg.setdefault("rules", []), {m["name"] for m in metrics})
     cfg.setdefault("report", {})
     fields(cfg["report"], ["include_raw_rows", "evidence_exports"], [], "report")
     cfg["report"].setdefault("include_raw_rows", False)
@@ -122,3 +124,40 @@ def validate_metric(metric, keys):
             raise InvestigationError("A key cannot be the metric column")
     elif metric["aggregate"] != "count" or "column" in metric or "null_policy" in metric:
         raise InvestigationError("Use sum with column/null_policy, or count without either")
+
+
+RULE_MEASURES = {
+    "delta", "abs_delta", "percent_change", "abs_percent_change",
+    "current_total", "current_rows", "added_rows", "removed_rows", "removed_percent",
+}
+
+
+def threshold_number(value):
+    if type(value) not in (int, float, str):
+        raise InvestigationError("Rule bounds must be finite numbers or numeric strings")
+    try:
+        number = Decimal(str(value))
+    except InvalidOperation:
+        raise InvestigationError("Rule bounds must be finite numbers or numeric strings") from None
+    if not number.is_finite():
+        raise InvestigationError("Rule bounds must be finite numbers or numeric strings")
+    return number
+
+
+def validate_rules(rules, metric_names):
+    if not isinstance(rules, list):
+        raise InvestigationError("rules must be a list")
+    seen = set()
+    for rule in rules:
+        fields(rule, ["name", "metric", "measure", "min", "max"], ["name", "metric", "measure"], "rule")
+        name = rule["name"]
+        if not isinstance(name, str) or not name.strip() or name in seen:
+            raise InvestigationError("Rule names must be unique, nonempty text")
+        seen.add(name)
+        if not isinstance(rule["metric"], str) or rule["metric"] not in metric_names:
+            raise InvestigationError("Rule metric must name a configured metric")
+        if not isinstance(rule["measure"], str) or rule["measure"] not in RULE_MEASURES:
+            raise InvestigationError(f"Rule measure must be one of {sorted(RULE_MEASURES)}")
+        bounds = {k: threshold_number(rule[k]) for k in ("min", "max") if k in rule}
+        if not bounds or ("min" in bounds and "max" in bounds and bounds["min"] > bounds["max"]):
+            raise InvestigationError("Rule requires min and/or max, with min <= max")
