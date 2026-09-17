@@ -267,7 +267,8 @@ def test_standalone_html(tmp_path):
     class Inspector(HTMLParser):
         def handle_starttag(self, tag, attrs):
             assert tag not in ('script','iframe','link','img','object','embed')
-            assert not any(k.startswith('on') or k in ('src','href') for k,v in attrs)
+            assert not any(k.startswith('on') or k == 'src' for k,v in attrs)
+            assert all(v.startswith('#') for k,v in attrs if k == 'href')
     cfg=demo(tmp_path/'demo')
     investigate(cfg,tmp_path/'out')
     html=(tmp_path/'out/report.html').read_text(encoding='utf-8')

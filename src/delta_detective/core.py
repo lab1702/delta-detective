@@ -12,6 +12,7 @@ from .rules import evaluate_rules
 from .schema import check_schema
 from .fields import compare_fields
 from .rule_exports import export_rule_evidence
+from .summary import build_summary
 
 
 def prepare_output(out, overwrite, inputs=()):
@@ -95,6 +96,7 @@ def investigate(config, out, overwrite=False):
         data['execution_status'] = 'success'
         data["rule_checks"] = evaluate_rules(cfg["rules"], results, con, cfg, execute, field_changes=field_changes)
         evidence.extend(export_rule_evidence(con, cfg, results, data['rule_checks'], stage, execute))
+        data['investigation_summary'] = build_summary(data)
         summary = data["summary"]
         replay = []
         if cfg['compare_fields']:
@@ -114,6 +116,7 @@ def investigate(config, out, overwrite=False):
                     "rule_checks": data["rule_checks"],
                     "schema_checks": schema_checks,
                     "field_changes": field_changes,
+                    'investigation_summary': data['investigation_summary'],
                     "metric_reconciliations": [{"name": item["metric"]["name"], "sql_schema": item["sql_schema"],
                         **{k: item["summary"][k] for k in ("status", "exact", "residual", "tolerance")}} for item in results],
                     "raw_evidence": {"included": bool(evidence), "exports": evidence, "selected_dimensions": selected_dimensions(cfg), 'compare_fields': cfg['compare_fields'],
@@ -163,6 +166,7 @@ def publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements)
                 evidence_exports=[], rule_checks={'status': 'not_evaluated', 'results': []},
                 field_changes={'status': 'not_evaluated', 'fields': []},
                 validation=checks, limitations=LIMITATIONS)
+    data['investigation_summary'] = build_summary(data)
     sql = '-- Schema-only run. Replay loads snapshots; Python evaluates the schema contract.\n' + '\n\n'.join(
         statements + ['DESCRIBE main.reference;', 'DESCRIBE main.current;'])
     manifest = dict(application_version='0.1.0', duckdb_version=duckdb.__version__,
@@ -170,6 +174,7 @@ def publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements)
                     inputs=profiles, execution_status=data['execution_status'], schema_checks=schema_checks,
                     reconciliation=None, metric_reconciliations=[], rule_checks=data['rule_checks'],
                     field_changes=data['field_changes'],
+                    investigation_summary=data['investigation_summary'],
                     validation=checks, raw_evidence={'included': False, 'exports': []},
                     assumptions_and_limitations=LIMITATIONS)
     for filename, content in [('findings.json', dumps(data)), ('manifest.json', dumps(manifest)),

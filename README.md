@@ -25,7 +25,23 @@ python -m pytest -q
 ```
 
 Open `investigation/report.html` directly in your browser. It contains all styling
-and analysis details, with no external resources. Output directories must be empty
+and analysis details, with no external resources. An investigation summary at the
+top distinguishes blocked comparisons, completed runs with rules needing review,
+completed runs with all rules passed, and completed runs with no configured rules.
+It shows verified totals/deltas, key populations, failed or undefined rules with
+their bounds, and selected category/field changes. Internal links lead to details;
+enabled rule evidence exports have local download links and truncation counts.
+
+The summary is deterministic and available as `investigation_summary` in both
+findings and manifest JSON. It shows all metrics in configuration order (never
+ranks unlike metric units), up to ten non-passing rules, three largest nonzero
+category contributions per metric excluding Other, and five fields ranked by
+changed-record count. Ties retain report order. Dimension views can overlap;
+contributions are not added across them. The summary states observations and rule
+outcomes without inferred causes. Schema-blocked runs show contract violations
+and never claim that comparison or threshold evaluation completed.
+
+Output directories must be empty
 or absent; use `--overwrite` to explicitly replace an existing bundle. An output
 directory cannot contain an input or the configuration. An execution failure
 leaves a prior bundle untouched and exits nonzero. Finding differences is success
