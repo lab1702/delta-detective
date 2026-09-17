@@ -6,6 +6,15 @@ TEMPLATE = """<!doctype html><html lang="en"><meta charset="utf-8">
 <h1>Delta detective</h1>
 {% set bundle = data %}
 {% set overview = bundle.investigation_summary %}
+{% if bundle.filter_scope and bundle.filter_scope.filters %}
+<section id="comparison-scope"><h2>Filtered comparison</h2>
+<p>{{ bundle.filter_scope.note }}</p>
+<p>All filters must match (AND). Null values only match an explicit is_null filter.</p>
+<ul>{% for f in bundle.filter_scope.filters %}<li>{{ f.column }} · {{ f.operator }}{% if 'value' in f %} · {{ f.value }}{% endif %}</li>{% endfor %}</ul>
+{% if bundle.filter_scope.status == 'applied' %}
+<table><tr><th>Input</th><th>Total rows</th><th>Included</th><th>Excluded</th></tr>
+{% for side, counts in bundle.filter_scope.inputs.items() %}<tr><td>{{ side }}</td><td>{{ counts.total_rows }}</td><td>{{ counts.included_rows }}</td><td>{{ counts.excluded_rows }}</td></tr>{% endfor %}</table>
+{% endif %}</section>{% endif %}
 <section id="investigation-summary" aria-label="Investigation summary">
 <h2>{{ overview.headline }}</h2>
 {% if overview.status == 'blocked' %}

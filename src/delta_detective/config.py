@@ -43,7 +43,7 @@ def load_config(path):
         cfg = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise InvestigationError(f"Cannot read configuration: {exc}") from exc
-    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema", "compare_fields", "csv", "column_mapping"],
+    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema", "compare_fields", "csv", "column_mapping", "filters"],
            ["mode", "reference", "current", "key"], "configuration")
     if cfg["mode"] != "snapshots":
         raise InvestigationError("Only mode: snapshots is supported")
@@ -121,7 +121,34 @@ def load_config(path):
         cfg[side] = local_input(cfg[side], path.parent, side)
     validate_csv_options(cfg)
     validate_column_mapping(cfg)
+    validate_filters(cfg.get('filters', []))
     return cfg
+
+
+def validate_filters(filters):
+    if not isinstance(filters, list):
+        raise InvestigationError('filters must be a list')
+    for item in filters:
+        fields(item, ['column', 'operator', 'value'], ['column', 'operator'], 'filter')
+        if not isinstance(item['column'], str) or not item['column'] or '\x00' in item['column']:
+            raise InvestigationError('Filter column must be nonempty text without NUL')
+        op = item['operator']
+        if not isinstance(op, str) or op not in ('equals', 'in', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null'):
+            raise InvestigationError('Unsupported filter operator')
+        if op in ('is_null', 'is_not_null'):
+            if 'value' in item:
+                raise InvestigationError('Null filters must omit value')
+            continue
+        if 'value' not in item:
+            raise InvestigationError('Filter requires value')
+        values = item['value'] if op == 'in' else [item['value']]
+        if not isinstance(values, list) or not values:
+            raise InvestigationError('Membership filters require a nonempty value list')
+        if any(type(v) not in (str, bool, int, float) or (isinstance(v, str) and '\x00' in v) for v in values):
+            raise InvestigationError('Filter values must be text, booleans, or finite numbers; use is_null for nulls')
+        for v in values:
+            if type(v) in (int, float):
+                threshold_number(v)
 
 
 def identifier_key(name):

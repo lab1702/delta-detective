@@ -172,6 +172,56 @@ modified. Each run is standalone and DuckDB resource settings remain unchanged.
 Add mappings directly to the YAML configuration; the init wizard inspects the
 original source names.
 
+### Filtered comparisons
+
+Use a shared `filters` list to compare a subset of both snapshots. All conditions
+must match (AND); omitted or empty filters compare the full snapshots.
+
+```yaml
+filters:
+  - column: currency
+    operator: equals
+    value: USD
+  - column: region
+    operator: in
+    value: [East, West]
+  - column: order_date
+    operator: gte
+    value: "2026-01-01"
+  - column: amount
+    operator: lt
+    value: "1000.00"
+```
+
+Supported operators are `equals`, `in` (a nonempty list in `value`), `gt`, `gte`,
+`lt`, `lte`, `is_null`, and `is_not_null`. Null checks must omit `value`. Null
+values fail other conditions, including membership; null entries in membership
+lists are rejected. Bounds apply to numeric or DATE columns. Equality and
+membership support numeric, VARCHAR, BOOLEAN, and DATE columns. Text values must
+be strings and booleans must be YAML booleans. DATE values must be quoted ISO
+`YYYY-MM-DD` strings; timestamp filters are not supported. Numeric values must be
+finite and fit a decimal precision of 38; quote decimal bounds to avoid YAML
+floating-point precision loss. Bounds are not rounded to the column's scale.
+Floating-point source columns retain approximate comparison semantics.
+
+Filters use mapped column names and require those columns to exist with matching
+types in both inputs. The complete files are parsed and schema contracts checked
+first. Filters then select rows before key/value validation, joins, metrics,
+field comparisons, threshold rules, and exports. Excluded rows are not checked
+for duplicate/null keys or metric validity, but malformed input files still fail.
+No source file is modified, and DuckDB resource defaults remain unchanged.
+
+**Entering or leaving the selected subset appears as an addition or removal**,
+even when the record's key exists in both original files. Every reported metric
+and threshold result describes the selected population. The report prominently
+shows this scope and each input's total, included, and excluded row counts.
+
+`filter_scope` in findings and manifest JSON records the filters, status, counts,
+and scope explanation. Replay SQL applies the same predicates and retains count
+tables named `reference_filter_scope` and `current_filter_scope`. Schema-blocked
+runs mark filters as `not_evaluated`. Each run is standalone. Add filters directly
+to YAML; the init wizard continues to inspect full snapshots.
+
 ### Schema contracts
 
 An optional `schema` section defines the expected structure of **each** snapshot,

@@ -13,6 +13,7 @@ from .schema import check_schema
 from .fields import compare_fields
 from .rule_exports import export_rule_evidence
 from .summary import build_summary
+from .filtering import apply_filters, SCOPE_NOTE
 
 
 def prepare_output(out, overwrite, inputs=()):
@@ -50,6 +51,7 @@ def investigate(config, out, overwrite=False):
                 if before[side] != profiles[side]['sha256'] or fingerprint(cfg[side]) != before[side]:
                     raise InvestigationError('Input changed during analysis; rerun with stable snapshots')
             return publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements)
+        filter_scope = apply_filters(con, cfg, profiles, execute)
         validate_loaded(con, cfg, profiles, execute)
         a, b = (profiles[s]["schema"] for s in ("reference", "current"))
         schema_changes = [{"column": c, "reference_type": a.get(c), "current_type": b.get(c)} for c in sorted(a.keys() | b.keys()) if a.get(c) != b.get(c)]
@@ -94,6 +96,7 @@ def investigate(config, out, overwrite=False):
         data['field_changes'] = field_changes
         data['schema_checks'] = schema_checks
         data['execution_status'] = 'success'
+        data['filter_scope'] = filter_scope
         data["rule_checks"] = evaluate_rules(cfg["rules"], results, con, cfg, execute, field_changes=field_changes)
         evidence.extend(export_rule_evidence(con, cfg, results, data['rule_checks'], stage, execute))
         data['investigation_summary'] = build_summary(data)
@@ -115,6 +118,7 @@ def investigate(config, out, overwrite=False):
                     "validation": checks, "assumptions_and_limitations": LIMITATIONS,
                     "rule_checks": data["rule_checks"],
                     "schema_checks": schema_checks,
+                    "filter_scope": filter_scope,
                     "field_changes": field_changes,
                     'investigation_summary': data['investigation_summary'],
                     "metric_reconciliations": [{"name": item["metric"]["name"], "sql_schema": item["sql_schema"],
@@ -166,6 +170,8 @@ def publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements)
                 evidence_exports=[], rule_checks={'status': 'not_evaluated', 'results': []},
                 field_changes={'status': 'not_evaluated', 'fields': []},
                 validation=checks, limitations=LIMITATIONS)
+    data['filter_scope'] = dict(status='not_evaluated', filters=cfg.get('filters', []), inputs={},
+                               note='Schema contract failed; filters were not applied. ' + SCOPE_NOTE)
     data['investigation_summary'] = build_summary(data)
     sql = '-- Schema-only run. Replay loads snapshots; Python evaluates the schema contract.\n' + '\n\n'.join(
         statements + ['DESCRIBE main.reference;', 'DESCRIBE main.current;'])
@@ -174,6 +180,7 @@ def publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements)
                     inputs=profiles, execution_status=data['execution_status'], schema_checks=schema_checks,
                     reconciliation=None, metric_reconciliations=[], rule_checks=data['rule_checks'],
                     field_changes=data['field_changes'],
+                    filter_scope=data['filter_scope'],
                     investigation_summary=data['investigation_summary'],
                     validation=checks, raw_evidence={'included': False, 'exports': []},
                     assumptions_and_limitations=LIMITATIONS)
