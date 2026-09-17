@@ -19,10 +19,13 @@ from .filtering import apply_filters, SCOPE_NOTE
 
 def prepare_output(out, overwrite, inputs=()):
     out = Path(out).resolve()
-    for source in inputs:
+    sources = [path for value in inputs for path in (value if isinstance(value, list) else [value])]
+    for source in sources:
         source = Path(source).resolve()
         if source == out or out in source.parents:
             raise InvestigationError("Output directory must not contain configuration or input files")
+        if source.is_dir() and source in out.parents:
+            raise InvestigationError('Output must be outside input snapshot directories')
     if out.exists() and (not out.is_dir() or (any(out.iterdir()) and not overwrite)):
         raise InvestigationError("Output exists and is nonempty; choose another directory or use --overwrite")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -136,6 +139,8 @@ def investigate(config, out, overwrite=False):
     except duckdb.Error as exc:
         # Do not echo DuckDB's offending row/key values in default diagnostics.
         message = str(exc)
+        if 'Hive partition conflicts with stored column' in message:
+            raise InvestigationError('Hive partition conflicts with a stored column; directory values must agree with every row in that file') from None
         for reason in ("duplicate keys", "null key component", "null or nonfinite metric", "nonfinite comparison field"):
             if reason in message:
                 side = "reference" if "reference:" in message else "current"

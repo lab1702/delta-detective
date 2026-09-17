@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 from decimal import Decimal, InvalidOperation
 import yaml
 import duckdb
@@ -198,7 +199,8 @@ def validate_csv_options(cfg):
     allowed = ["types", "delimiter", "header", "quote", "escape", "nullstr", "dateformat", "timestampformat"]
     for side, options in cfg["csv"].items():
         fields(options, allowed, [], f"csv.{side}")
-        if Path(cfg[side]).suffix.lower() != ".csv":
+        from .inputs import has_csv
+        if not has_csv(cfg[side]):
             raise InvestigationError(f"csv.{side} requires a CSV input")
         for name, value in options.items():
             label = f"csv.{side}.{name}"
@@ -317,6 +319,15 @@ def validate_rules(rules, metric_names, groups=(), compare_fields=()):
 
 
 def local_input(value, base, side):
+    if isinstance(value, list):
+        if not value or any(not isinstance(p, str) for p in value):
+            raise InvestigationError(f'{side}: file list must contain one or more file paths')
+        paths = [local_input(p, base, side) for p in value]
+        if any(Path(p).is_dir() for p in paths):
+            raise InvestigationError(f'{side}: lists must contain files, not directories')
+        if len({os.path.normcase(p) for p in paths}) != len(paths):
+            raise InvestigationError(f'{side}: duplicate input file')
+        return paths
     if not isinstance(value, str) or "://" in value or value.startswith(("//", "\\\\")):
         raise InvestigationError(f"{side} must be a local file path")
     if "\x00" in value:
@@ -324,6 +335,10 @@ def local_input(value, base, side):
     resolved = (Path(base) / value).resolve()
     if any(character in str(resolved) for character in '*?[]'):
         raise InvestigationError(f"{side}: input paths must not contain glob characters (* ? [ ]); rename the file or parent directory")
+    if resolved.is_dir():
+        from .inputs import snapshot_files
+        snapshot_files(str(resolved))
+        return str(resolved)
     if not resolved.is_file() or resolved.suffix.lower() not in (".csv", ".parquet"):
         raise InvestigationError(f"{side}: expected an existing CSV or Parquet file: {resolved}")
     return str(resolved)

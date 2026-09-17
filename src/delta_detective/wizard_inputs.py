@@ -1,12 +1,12 @@
 """Optional input preparation before choosing comparison keys and metrics."""
 import json
 from decimal import Decimal
-from pathlib import Path
 
 from .config import (InvestigationError, validate_csv_options, validate_column_mapping,
                      validate_filters, identifier_key)
 from .filtering import apply_filters, filter_predicate, NUMERIC, SCOPE_NOTE
 from .loading import ident
+from .inputs import has_csv
 
 
 def csv_options(paths, ask, tell, choose):
@@ -14,7 +14,7 @@ def csv_options(paths, ask, tell, choose):
     options = ['types', 'delimiter', 'header', 'quote', 'escape', 'nullstr', 'dateformat', 'timestampformat']
     tell('CSV overrides are optional. Type overrides use exact source names; unspecified settings use inference.')
     for side, path in paths.items():
-        if Path(path).suffix.lower() != '.csv':
+        if not has_csv(path):
             continue
         settings = {}
         while True:

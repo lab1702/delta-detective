@@ -164,7 +164,9 @@ def validate(config, out, overwrite=False, export_invalid_rows=False, limit=100)
                 (stage / name).write_text(content, encoding='utf-8')
         publish(stage, target)
         return data
-    except duckdb.Error:
+    except duckdb.Error as exc:
+        if 'Hive partition conflicts with stored column' in str(exc):
+            raise InvestigationError('Hive partition conflicts with a stored column; directory values must agree with every row in that file') from None
         raise InvestigationError('Could not load or validate snapshots; check file structure, parsing options, and selected types. No validation bundle was written.') from None
     finally:
         if stage.exists():

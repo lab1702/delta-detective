@@ -41,11 +41,14 @@ def key_valid(con, columns):
 
 def init_config(reference, current, out='comparison.yaml', *, ask=None, tell=print):
     ask = input if ask is None else ask
-    paths = {side: local_input(str(value), Path.cwd(), side)
+    paths = {side: local_input(value if isinstance(value, list) else str(value), Path.cwd(), side)
              for side, value in [('reference', reference), ('current', current)]}
     target = Path(out).absolute()
     if target.exists() or target.is_symlink():
         raise InvestigationError("Configuration output already exists; choose a new file")
+    for value in paths.values():
+        if isinstance(value, str) and Path(value).is_dir() and Path(value) in target.resolve().parents:
+            raise InvestigationError('Configuration output must be outside input snapshot directories')
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = None
     try:

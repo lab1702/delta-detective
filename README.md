@@ -4,7 +4,7 @@ Two datasets in. A reconciled difference and an inspectable trail of evidence ou
 
 A local Python CLI for comparing **two versions of the same logical dataset**.
 DuckDB performs loading, validation, joins, and aggregation. Python receives only
-bounded aggregate summaries (at most 51 rows per breakdown per metric), never raw
+bounded aggregate summaries (at most 51 rows per breakdown per metric) and input-file metadata, never raw
 datasets. Segment rules scan all segment aggregates in batches of 50 and retain
 at most 50 displayed results per rule.
 No service, network calls, telemetry, pandas, or generated explanations are used.
@@ -43,7 +43,8 @@ and never claim that comparison or threshold evaluation completed.
 
 Output directories must be empty
 or absent; use `--overwrite` to explicitly replace an existing bundle. An output
-directory cannot contain an input or the configuration. An execution failure
+directory cannot contain an input or the configuration, or be inside an input
+snapshot directory. An execution failure
 leaves a prior bundle untouched and exits nonzero. Finding differences is success
 (exit 0), not an execution error. CLI input/execution errors exit 2. With
 `--fail-on-rule-violation`, failed or undefined threshold rules exit 3 after the
@@ -204,18 +205,89 @@ report:
   include_raw_rows: false
 ```
 
-Paths resolve relative to this YAML file. Only local `.csv` and `.parquet` inputs
-are supported. No URLs or SQL configuration.
+Paths resolve relative to this YAML file. Inputs can be local `.csv` or `.parquet`
+files, explicit lists of those files, or directories containing them recursively.
+No URLs or SQL configuration.
 Input paths, including parent directories, cannot contain glob characters
-(`*`, `?`, `[` or `]`), so DuckDB reads exactly the file recorded in the manifest.
-Hive partition inference is disabled for both formats: parent directory names
-never supply or replace column values.
+(`*`, `?`, `[` or `]`), so DuckDB reads exactly the files recorded in the manifest.
+Single-file inputs and explicit file lists ignore parent directory names.
+Directory inputs add root-relative Hive partition columns as described below.
 YAML uses a safe loader; duplicate mapping keys, unknown fields, and contradictory
 options are rejected.
 For **COUNT(*)**, replace the metric with `{name: rows, aggregate: count}`;
 neither `column` nor `null_policy` is allowed. `dimensions` defaults to `[]` and
 raw evidence defaults to false. Keys cannot also be metrics or dimensions,
 to avoid exposing key values in aggregate reports.
+
+### Multi-file and Hive directory snapshots
+
+Each side can independently use a single file, a nonempty file list, or a whole
+directory. Existing single-file configurations retain their behavior.
+
+```yaml
+reference:
+  - exports/reference/orders-east.parquet
+  - exports/reference/orders-west.parquet
+current: exports/current
+```
+
+An explicit list contains files only, with no repeated resolved paths. Files are
+combined as one snapshot: null/duplicate-key checks cover the combined population,
+and matching records can move between files. All files within a snapshot must have
+identical effective column names and types. Column order may differ and is aligned
+by name. Missing columns are not padded and types are not silently widened.
+CSV and Parquet may be mixed if their loaded schemas match. Per-side CSV overrides
+apply to every CSV file on that side; use explicit types when inference differs
+between populated and empty files.
+
+Directories are discovered recursively in deterministic path order. All `.csv`
+and `.parquet` files are included; other files, such as `_SUCCESS`, are ignored.
+Directories with no supported files fail. Directory links, junctions, and linked
+data files are rejected to avoid following files outside the selected inventory.
+Input and output directories must not overlap.
+
+Hive layouts are supported with any number of partition levels, for example:
+
+```text
+exports/current/
+  year=2026/
+    region=East/part-000.parquet
+    region=West/part-001.parquet
+```
+
+Only `key=value` path components **beneath the selected root** supply partition
+columns. Ordinary intermediate directories are allowed. All data files must have
+the same partition-column names; duplicate names within a path and collisions
+under DuckDB's case-insensitive identifier rules fail. Partition names and values
+are percent-decoded as UTF-8 (`East%2FNorth` becomes `East/North`). The literal
+`__HIVE_DEFAULT_PARTITION__` directory value becomes SQL null; an empty directory
+value stays empty text.
+
+Virtual partition columns are `VARCHAR`, preserving values such as `001` instead
+of guessing numeric/date types. They can be keys, dimensions, comparison fields,
+mapping sources, or text-filter targets. If a partition column is also stored in
+a file, its type and values are retained, and every row's text representation must
+match the decoded directory value (including nullness). Conflicts fail instead
+of silently replacing data. A physical numeric partition column in one file and
+a virtual text column in another therefore fail the strict schema check.
+
+Partition columns are added before column mapping, schema contracts, and shared
+filters. `csv.types` addresses physical CSV columns only. Explicit file lists do
+not infer partitions; use a directory path to enable Hive semantics.
+
+The manifest records every file's absolute path, SHA-256, pre-filter row count,
+physical schema, parsing settings, and partition values. Each snapshot also has
+file/row totals and an inventory fingerprint; directory membership or file-content
+changes during a run prevent publication. Single-file SHA-256 values retain their
+original meaning. Replay SQL reads explicit recorded paths and uses explicit
+partition constants, so newly added files do not enter a replay. Matching original
+files are still required. The replay tables `reference_input_files` and
+`current_input_files` contain per-file row counts.
+
+`investigate` and `validate` accept all three forms through YAML. The init wizard
+accepts directory paths in its two positional arguments and offers Hive columns
+in the usual menus. Its Python `init_config` API also accepts file lists. No merge
+step, run history, or resource-setting override is required.
 
 ### Column-name mapping
 
@@ -906,7 +978,7 @@ inferred. Unknown column names and invalid options fail the run. With
 `header: false`, use DuckDB's generated names such as `column0` and `column1`
 (wide files may use zero-padded names). Set `header: true` and types for every
 selected column when comparing a header-only CSV with a populated snapshot.
-Overrides on Parquet inputs are rejected. Schema contracts remain separate checks
+Overrides on snapshots containing no CSV files are rejected. Schema contracts remain separate checks
 of the resulting loaded types.
 
 The manifest records the requested overrides and effective parsing settings;
