@@ -37,6 +37,40 @@ Pytest owns and may remove that directory.
 
 ## Configuration
 
+To create a configuration interactively:
+
+```sh
+delta-detective init reference.parquet current.parquet
+# Or choose a new output file:
+delta-detective init reference.csv current.csv --out comparisons/orders.yaml
+```
+
+The wizard displays column names and types from both snapshots, then offers
+numbered menus for key columns, count/sum metrics, dimensions, and combined
+dimension groups. Enter comma-separated numbers for multiple selections. Choose
+metric names and optionally add threshold rules by selecting a metric, measure,
+and inclusive minimum/maximum. Blank optional selections skip that step; EOF or
+Ctrl+C cancels without writing a configuration.
+
+Candidate single-column keys are checked for uniqueness and nulls in both complete
+snapshots. You must select the logical key yourself: uniqueness does not establish
+record identity. You can select a composite key even when its individual columns
+are not unique; the selected tuple is checked before continuing. Empty snapshots
+provide no evidence for identity. Only columns with matching supported types are
+selectable, and sum choices exclude null/nonfinite columns. No raw row values are
+displayed. CSV inference has the same limitations described below, including
+numeric-looking identifiers; use typed Parquet to preserve those identifiers.
+
+The wizard uses the investigation loader and runs validation and reconciliation
+for every selected metric and breakdown before saving. This scans full inputs
+and can take time on large datasets; it is not a schema-only preview. It writes
+one UTF-8 YAML file (default `comparison.yaml`) with absolute input paths and raw
+exports disabled. Existing files are never overwritten. No report bundle is
+created until you run `investigate`. Threshold rules are validated as configuration;
+their pass/fail results are reported during the investigation.
+
+You can also write the YAML directly:
+
 ```yaml
 mode: snapshots
 reference: reference.parquet

@@ -17,10 +17,8 @@ def fingerprint(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def load_and_validate(con, cfg, execute):
+def load_snapshots(con, cfg, execute):
     profiles = {}
-    metrics = configured_metrics(cfg)
-    required = cfg["key"] + selected_dimensions(cfg) + [m["column"] for m in metrics if m["aggregate"] == "sum"]
     for side in ("reference", "current"):
         path = cfg[side]
         parsing = {"format": Path(path).suffix[1:], "hive_partitioning": False}
@@ -50,6 +48,21 @@ def load_and_validate(con, cfg, execute):
             source = f"read_parquet({literal(path)}, hive_partitioning=false)"
         execute(f"CREATE TABLE {side} AS SELECT * FROM {source}")
         schema = {r[0]: r[1] for r in con.execute(f"DESCRIBE {side}").fetchall()}
+        profiles[side] = {"schema": schema, "sha256": fingerprint(path), "parsing": parsing}
+    return profiles
+
+
+def load_and_validate(con, cfg, execute):
+    profiles = load_snapshots(con, cfg, execute)
+    validate_loaded(con, cfg, profiles, execute)
+    return profiles
+
+
+def validate_loaded(con, cfg, profiles, execute):
+    metrics = configured_metrics(cfg)
+    required = cfg["key"] + selected_dimensions(cfg) + [m["column"] for m in metrics if m["aggregate"] == "sum"]
+    for side in ("reference", "current"):
+        schema = profiles[side]["schema"]
         missing = set(required) - schema.keys()
         if missing:
             raise InvestigationError(f"{side}: missing required columns {sorted(missing)}; check CSV header and inferred schema")
@@ -65,7 +78,6 @@ def load_and_validate(con, cfg, execute):
                 if not numeric:
                     raise InvestigationError(f"{side}: sum column must be numeric; inferred {typ}. Use typed Parquet for exact decimals; repair malformed CSV values upstream.")
                 execute(f"SELECT CASE WHEN EXISTS (SELECT 1 FROM {side} WHERE {ident(col)} IS NULL OR NOT isfinite({ident(col)})) THEN error('{side}: null or nonfinite metric') ELSE true END")
-        profiles[side] = {"schema": schema, "sha256": fingerprint(path), "parsing": parsing}
     for col in required:
         a, b = (profiles[s]["schema"][col] for s in ("reference", "current"))
         if a != b:

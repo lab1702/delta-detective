@@ -3,11 +3,16 @@ import sys
 from .config import InvestigationError
 from .core import investigate
 from .demo import demo
+from .wizard import init_config
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Reconcile two local versions of one logical dataset.")
     commands = parser.add_subparsers(dest="command", required=True)
+    init = commands.add_parser("init", help="Interactively create a validated comparison configuration.")
+    init.add_argument("reference")
+    init.add_argument("current")
+    init.add_argument("--out", default="comparison.yaml", help="New YAML file (default: comparison.yaml).")
     for name in ("demo", "investigate"):
         sub = commands.add_parser(name)
         if name == "investigate":
@@ -18,7 +23,9 @@ def main(argv=None):
         sub.add_argument("--overwrite", action="store_true")
     args = parser.parse_args(argv)
     try:
-        if args.command == "demo":
+        if args.command == "init":
+            init_config(args.reference, args.current, args.out)
+        elif args.command == "demo":
             print(f"Demo configuration: {demo(args.out, args.overwrite)}")
         else:
             data = investigate(args.config, args.out, args.overwrite)

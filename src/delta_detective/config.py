@@ -91,17 +91,7 @@ def load_config(path):
         if "limit" in export and (type(export["limit"]) is not int or export["limit"] <= 0):
             raise InvestigationError("Evidence export limit must be a positive integer")
     for side in ("reference", "current"):
-        value = cfg[side]
-        if not isinstance(value, str) or "://" in value or value.startswith(("//", "\\\\")):
-            raise InvestigationError(f"{side} must be a local file path")
-        if "\x00" in value:
-            raise InvestigationError(f"{side}: input paths must not contain NUL characters")
-        resolved = (path.parent / value).resolve()
-        if any(character in str(resolved) for character in '*?[]'):
-            raise InvestigationError(f"{side}: input paths must not contain glob characters (* ? [ ]); rename the file or parent directory")
-        if not resolved.is_file() or resolved.suffix.lower() not in (".csv", ".parquet"):
-            raise InvestigationError(f"{side}: expected an existing CSV or Parquet file: {resolved}")
-        cfg[side] = str(resolved)
+        cfg[side] = local_input(cfg[side], path.parent, side)
     return cfg
 
 
@@ -161,3 +151,16 @@ def validate_rules(rules, metric_names):
         bounds = {k: threshold_number(rule[k]) for k in ("min", "max") if k in rule}
         if not bounds or ("min" in bounds and "max" in bounds and bounds["min"] > bounds["max"]):
             raise InvestigationError("Rule requires min and/or max, with min <= max")
+
+
+def local_input(value, base, side):
+    if not isinstance(value, str) or "://" in value or value.startswith(("//", "\\\\")):
+        raise InvestigationError(f"{side} must be a local file path")
+    if "\x00" in value:
+        raise InvestigationError(f"{side}: input paths must not contain NUL characters")
+    resolved = (Path(base) / value).resolve()
+    if any(character in str(resolved) for character in '*?[]'):
+        raise InvestigationError(f"{side}: input paths must not contain glob characters (* ? [ ]); rename the file or parent directory")
+    if not resolved.is_file() or resolved.suffix.lower() not in (".csv", ".parquet"):
+        raise InvestigationError(f"{side}: expected an existing CSV or Parquet file: {resolved}")
+    return str(resolved)
