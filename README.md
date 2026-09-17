@@ -330,6 +330,70 @@ overall failure status and opt-in `--fail-on-rule-violation` exit code 3 after t
 bundle is saved. Raw field values remain excluded unless exports are enabled.
 The `init` wizard still authors metric rules; add field rules in YAML.
 
+### Rule-specific evidence exports
+
+Add `export` to an individual threshold rule to save supporting records when the
+rule fails or is undefined. This explicitly opts into exporting raw keys and
+selected before/after values, even when `include_raw_rows` is false:
+
+```yaml
+compare_fields: [delivery_date]
+rules:
+  - name: Delivery dates must not become null
+    field: delivery_date
+    measure: became_null
+    max: 0
+    export: {limit: 100}
+  - name: Each region retains its records
+    metric: orders
+    group_by: [region]
+    measure: removed_percent
+    max: 5
+    export: {limit: 200}
+```
+
+Use the existing configured metric and dimension names. `export: {}` defaults to
+100 records; `limit` must be a positive integer. Passed rules skip their export.
+Schema-contract failures skip all rule evaluation and raw exports. No export is
+enabled by default, and `--fail-on-rule-violation` is not needed to generate one.
+
+Each requested non-passing rule writes `rule_N_rows.csv`, where N is its zero-based
+position in the configuration. Rule names never become filenames. Rows sort by
+configured key columns for deterministic limits. Exports contain the joined
+selected fields (`kN`, `rv`/`cv`, `rdN`/`cdN`, `rfN`/`cfN`, `rp`/`cp`); unlike the
+general focused exports, these files do not add a contribution column. A field
+rule uses the first metric's joined table for metric context and exports once,
+regardless of how many metrics are configured.
+
+| Rule measure | Supporting records |
+| --- | --- |
+| Field count or percentage | Matched records counted by that measure (the numerator for a percentage) |
+| Overall removals / removal percentage | Reference-only keys |
+| Overall additions | Current-only keys |
+| Current total or current row count | Keys present in the current snapshot |
+| Delta or percentage change | All keys contributing to the before/after population |
+| Segment rule | The corresponding population restricted to failed or undefined selected segments; removals/additions include moves out/in |
+
+All failing segments are considered, including those outside the report's
+50-segment display limit. Keys appearing in several failing segments are exported
+once per rule. Records are supporting evidence, not individually proven causes
+or violations. A lower-bound failure can produce a header-only file when no
+existing records qualify; the export cannot invent missing records. A percentage
+export contains numerator records, not the full denominator population.
+
+`rule_checks.results[N].evidence_export` links each rule to its file and records
+`rows`, `total_rows`, `limit`, `truncated`, the selection description, and a SQL
+evidence view. Exported files also appear in the normal report/manifest inventory.
+HTML includes a relative download link, and CLI output shows counts and truncation.
+Passed rules instead record a skipped status and reason.
+
+Replay creates `rule_N_evidence_all` (all qualifying rows) and `rule_N_evidence`
+(the limited selection) in the applicable metric schema. Segment exports also
+record `rule_N_failed_segments` with IDs into `segment_rule_N`; those IDs preserve
+this run's Python rule decisions, rather than reevaluating thresholds during SQL
+replay. Replay does not write CSV files. SQL and manifests remain local to the
+standalone investigation, and failed exports leave a prior bundle untouched.
+
 ### Category movement tables
 
 Each configured dimension and dimension group automatically includes a movement

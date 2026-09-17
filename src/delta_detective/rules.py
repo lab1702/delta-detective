@@ -103,12 +103,16 @@ def evaluate_segments(rule, item, index, con, cfg, execute):
       SELECT {current}, 0, cv, 0, 1,
         CASE WHEN rp IS NULL OR ({changed}) THEN 1 ELSE 0 END, 0
       FROM {ns}.joined WHERE cp)
-      SELECT {', '.join(categories)}, sum(reference_total) AS reference_total,
+      SELECT row_number() OVER (ORDER BY {', '.join(categories)}) AS segment_id, {', '.join(categories)}, sum(reference_total) AS reference_total,
         sum(current_total) AS current_total, sum(reference_rows) AS reference_rows,
         sum(current_rows) AS current_rows, sum(added_rows) AS added_rows,
         sum(removed_rows) AS removed_rows
       FROM memberships GROUP BY {', '.join(categories)}""")
-    cursor = con.execute(f"SELECT * FROM {table} ORDER BY " + ', '.join(c + ' NULLS FIRST' for c in categories))
+    export_table = f'{ns}.rule_{index}_failed_segments'
+    if 'export' in rule:
+        execute(f'CREATE TABLE {export_table} (segment_id BIGINT, status VARCHAR)')
+    cursor = con.cursor()
+    cursor.execute(f"SELECT * FROM {table} ORDER BY " + ', '.join(c + ' NULLS FIRST' for c in categories))
     fields = [c[0] for c in cursor.description]
     counts = dict(passed=0, failed=0, undefined=0)
     samples = {status: [] for status in counts}
@@ -116,6 +120,7 @@ def evaluate_segments(rule, item, index, con, cfg, execute):
     # Evaluate all aggregate segments in bounded batches; never materialize source
     # records or an unbounded list of segment results in Python.
     while batch := cursor.fetchmany(50):
+        failed_ids = []
         for values in batch:
             record = dict(zip(fields, values))
             segment = {c: record[f'g{i}'] for i, c in enumerate(group)}
@@ -132,8 +137,13 @@ def evaluate_segments(rule, item, index, con, cfg, execute):
             detail = evaluate_rules([plain_rule], [dict(item, summary=record)])['results'][0]
             detail.update(segment=segment, evidence=f'analysis.sql: {table}')
             counts[detail['status']] += 1
+            if 'export' in rule and detail['status'] != 'passed':
+                failed_ids.append(f"({record['segment_id']}, '{detail['status']}')")
             if len(samples[detail['status']]) < 50:
                 samples[detail['status']].append(detail)
+        if failed_ids:
+            execute(f'INSERT INTO {export_table} VALUES ' + ', '.join(failed_ids))
+    cursor.close()
     total = sum(counts.values())
     details = (samples['failed'] + samples['undefined'] + samples['passed'])[:50]
     reason = 'No matching segments in either snapshot.' if not total else None

@@ -11,6 +11,7 @@ from .report import render
 from .rules import evaluate_rules
 from .schema import check_schema
 from .fields import compare_fields
+from .rule_exports import export_rule_evidence
 
 
 def prepare_output(out, overwrite, inputs=()):
@@ -93,6 +94,7 @@ def investigate(config, out, overwrite=False):
         data['schema_checks'] = schema_checks
         data['execution_status'] = 'success'
         data["rule_checks"] = evaluate_rules(cfg["rules"], results, con, cfg, execute, field_changes=field_changes)
+        evidence.extend(export_rule_evidence(con, cfg, results, data['rule_checks'], stage, execute))
         summary = data["summary"]
         replay = []
         if cfg['compare_fields']:
@@ -115,7 +117,7 @@ def investigate(config, out, overwrite=False):
                     "metric_reconciliations": [{"name": item["metric"]["name"], "sql_schema": item["sql_schema"],
                         **{k: item["summary"][k] for k in ("status", "exact", "residual", "tolerance")}} for item in results],
                     "raw_evidence": {"included": bool(evidence), "exports": evidence, "selected_dimensions": selected_dimensions(cfg), 'compare_fields': cfg['compare_fields'],
-                        "contents": "Per metric: kN keys in configured order; rv/cv metric values; rdN/cdN dimensions in selected_dimensions order; rfN/cfN compared fields in compare_fields order; rp/cp side presence. Focused exports also include contribution. Only selected fields, not full source rows."}}
+                        "contents": "Per metric: kN keys in configured order; rv/cv metric values; rdN/cdN dimensions in selected_dimensions order; rfN/cfN compared fields in compare_fields order; rp/cp side presence. General focused exports also include contribution; rule exports do not. Only selected fields, not full source rows."}}
         for filename, content in [("findings.json", dumps(data)), ("manifest.json", dumps(manifest)),
                                   ("analysis.sql", sql), ("report.html", render(cfg, data, checks, sql, dumps({"changes": schema_changes, "inputs": profiles})))]:
             (stage / filename).write_text(content, encoding="utf-8")

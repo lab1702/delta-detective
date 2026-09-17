@@ -171,7 +171,12 @@ def validate_rules(rules, metric_names, groups=(), compare_fields=()):
         raise InvestigationError("rules must be a list")
     seen = set()
     for rule in rules:
-        fields(rule, ["name", "metric", "field", "measure", "min", "max", "group_by", "where"], ["name", "measure"], "rule")
+        fields(rule, ["name", "metric", "field", "measure", "min", "max", "group_by", "where", "export"], ["name", "measure"], "rule")
+        if 'export' in rule:
+            fields(rule['export'], ['limit'], [], 'rule export')
+            rule['export'].setdefault('limit', 100)
+            if type(rule['export']['limit']) is not int or rule['export']['limit'] <= 0:
+                raise InvestigationError('Rule export limit must be a positive integer')
         name = rule["name"]
         if not isinstance(name, str) or not name.strip() or name in seen:
             raise InvestigationError("Rule names must be unique, nonempty text")

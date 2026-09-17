@@ -23,6 +23,10 @@ TEMPLATE = """<!doctype html><html lang="en"><meta charset="utf-8">
 {% if rule.reason %}<p>{{ rule.reason }}</p>{% endif %}
 <table><tr><th>Segment</th><th>Observed</th><th>Result</th></tr>{% for s in rule.segments %}<tr><td>{% for k,v in s.segment.items() %}{{ k }}: {{ 'NULL (missing value)' if v is none else 'Value: ' ~ v }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td><td>{{ s.observed if s.observed is not none else 'undefined' }}</td><td>{{ s.status }}{% if s.reason %}: {{ s.reason }}{% endif %}</td></tr>{% endfor %}</table></section>
 {% endfor %}
+{% for rule in bundle.rule_checks.results if rule.evidence_export is defined %}
+<section><h3>Evidence for rule: {{ rule.name }}</h3>{% set e = rule.evidence_export %}
+{% if e.status == 'exported' %}<p><a href="{{ e.file }}">{{ e.file }}</a>: {{ e.rows }} of {{ e.total_rows }} eligible records exported. Truncated: {{ 'yes' if e.truncated else 'no' }}. Limit: {{ e.limit }}.</p><p>{{ e.selection }} Rows are ordered by key. A header-only export means no existing records satisfy the selection; a lower-bound failure need not identify offending records.</p>{% else %}<p>Export skipped: {{ e.reason }}</p>{% endif %}</section>
+{% endfor %}
 {% for data in bundle.metrics %}
 <h2>Snapshot comparison &middot; {{ data.metric.name }} &middot; {{ data.metric.aggregate }}</h2>
 <p class="badge">Reconciliation {{ data.summary.status }} · {{ 'Exact arithmetic' if data.summary.exact else 'Approximate floating-point arithmetic' }}</p>

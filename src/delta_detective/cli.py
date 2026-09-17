@@ -55,6 +55,12 @@ def main(argv=None):
                 print(f"{rule['name']}: {rule['status']} ({target}.{rule['measure']}={observed}; {bounds})")
                 if 'field' in rule:
                     print(f"  {rule['numerator']} of {rule['denominator']} matched records; unit={rule['unit']}")
+                if 'evidence_export' in rule:
+                    export = rule['evidence_export']
+                    if export['status'] == 'exported':
+                        print(f"  Evidence: {export['file']}; {export['rows']} of {export['total_rows']} rows; truncated={export['truncated']}")
+                    else:
+                        print(f"  Evidence skipped: {export['reason']}")
                 if 'segment_counts' in rule:
                     print(f"  Segments: {rule['segment_counts']}; omitted from display: {rule['omitted_segments']}")
                     for segment in rule['segments']:
