@@ -54,6 +54,8 @@ Paths resolve relative to this YAML file. Only local `.csv` and `.parquet` input
 are supported. No URLs or SQL configuration.
 Input paths, including parent directories, cannot contain glob characters
 (`*`, `?`, `[` or `]`), so DuckDB reads exactly the file recorded in the manifest.
+Hive partition inference is disabled for both formats: parent directory names
+never supply or replace column values.
 YAML uses a safe loader; duplicate mapping keys, unknown fields, and contradictory
 options are rejected.
 For **COUNT(*)**, replace the metric with `{name: rows, aggregate: count}`;

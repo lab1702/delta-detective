@@ -21,7 +21,7 @@ def load_and_validate(con, cfg, execute):
     profiles = {}
     for side in ("reference", "current"):
         path = cfg[side]
-        parsing = {"format": Path(path).suffix[1:]}
+        parsing = {"format": Path(path).suffix[1:], "hive_partitioning": False}
         if Path(path).suffix.lower() == ".csv":
             # Capture the actual sniffer's decisions; materialize with explicit settings.
             cursor = con.execute(f"SELECT * FROM sniff_csv({literal(path)}, sample_size=-1)")
@@ -37,7 +37,7 @@ def load_and_validate(con, cfg, execute):
                 raise InvestigationError(f"{side}: CSV inference would skip leading rows; supply a clean, consistent CSV with no preamble")
             settings = [f"{k}={literal(v)}" for k, v in options.items() if v is not None]
             settings += [f"header={str(sniff['HasHeader']).lower()}", f"skip={sniff['SkipRows']}",
-                         "auto_detect=false", "strict_mode=true", "ignore_errors=false", "null_padding=false",
+                         "auto_detect=false", "hive_partitioning=false", "strict_mode=true", "ignore_errors=false", "null_padding=false",
                          "nullstr=''", "comment=''", "columns={" + ",".join(f"{literal(c['name'])}:{literal(c['type'])}" for c in cols) + "}"]
             source = f"read_csv({literal(path)}, {', '.join(settings)})"
             parsing.update({"sniffer": sniff, "sample_size": -1, "strict_mode": True,
@@ -45,7 +45,7 @@ def load_and_validate(con, cfg, execute):
                             "newline_reader": "DuckDB default newline recognition; sniffer observation recorded separately",
                             "comment": ""})
         else:
-            source = f"read_parquet({literal(path)})"
+            source = f"read_parquet({literal(path)}, hive_partitioning=false)"
         execute(f"CREATE TABLE {side} AS SELECT * FROM {source}")
         schema = {r[0]: r[1] for r in con.execute(f"DESCRIBE {side}").fetchall()}
         required = cfg["key"] + cfg["dimensions"] + ([cfg["metric"]["column"]] if cfg["metric"]["aggregate"] == "sum" else [])

@@ -404,3 +404,29 @@ def test_non_utf8_config_cli(tmp_path):
     assert 'Cannot read configuration' in result.stderr
     assert 'Traceback' not in result.stderr
     assert not (tmp_path/'out').exists()
+
+
+@pytest.mark.parametrize('suffix', ['csv', 'parquet'])
+@pytest.mark.parametrize('partition_column', ['id', 'amount', 'category'])
+def test_parent_directories_do_not_override_input_values(tmp_path, suffix, partition_column):
+    cfg = setup(tmp_path, [(1, 10, 'a')], [(1, 8, 'b')])
+    settings = yaml.safe_load(cfg.read_text())
+    for side, partition, amount, category in [('reference', 999, 10, 'a'), ('current', 888, 8, 'b')]:
+        folder = tmp_path/f'{partition_column}={partition}'
+        folder.mkdir()
+        path = folder/f'{side}.{suffix}'
+        if suffix == 'csv':
+            path.write_text(f'id,amount,category\n1,{amount},{category}\n')
+        else:
+            path.write_bytes((tmp_path/f'{side}.parquet').read_bytes())
+        settings[side] = str(path)
+    cfg.write_text(yaml.safe_dump(settings))
+    out = tmp_path/'out'
+    data = investigate(cfg, out)
+    assert_valid(data, (10, 8), (0, 0, -2))
+    assert {row['category'] for row in data['dimensions'][0]['rows']} == {'a', 'b'}
+    manifest = json.loads((out/'manifest.json').read_text())
+    assert all(profile['parsing']['hive_partitioning'] is False for profile in manifest['inputs'].values())
+    with duckdb.connect() as con:
+        con.execute((out/'analysis.sql').read_text())
+        assert con.execute('SELECT reference_total,current_total,matched_rows FROM reconciliation').fetchone() == (10, 8, 1)
