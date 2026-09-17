@@ -10,6 +10,8 @@ import yaml
 from .comparison import compare
 from .config import InvestigationError, RULE_MEASURES, load_config, local_input, validate_rules
 from .loading import fingerprint, ident, load_snapshots, validate_loaded
+from .wizard_options import advanced_options, advanced_rule, yes_no, positive_limit
+from .schema import check_schema
 
 
 def choose(prompt, options, ask, tell, *, minimum=0, maximum=None):
@@ -108,28 +110,37 @@ def init_config(reference, current, out='comparison.yaml', *, ask=None, tell=pri
                         tell("Choose at least two columns and a group not already added.")
                     else:
                         groups.append(group)
+            advanced = yes_no("Configure schema, field comparisons, scoped rules, or exports? [y/N]: ", ask, tell)
+            options = advanced_options(con, schemas, common, key, ask, tell, choose) if advanced else {}
+            compared = options.get('compare_fields', [])
             rules = []
             tell("Optional threshold rules use inclusive bounds; percentage bounds use 5 for 5%. Undefined percentages do not pass.")
             while True:
                 name = ask("Rule name (Enter to finish): ").strip()
                 if not name:
                     break
-                metric_index = choose("Metric number: ", [m['name'] for m in metrics], ask, tell, minimum=1, maximum=1)[0]
-                measures = sorted(RULE_MEASURES)
-                measure = measures[choose("Measure number: ", measures, ask, tell, minimum=1, maximum=1)[0]]
-                candidate = dict(name=name, metric=metrics[metric_index]['name'], measure=measure)
+                if advanced:
+                    candidate = advanced_rule(name, metrics, dimensions, groups, compared, common, ask, tell, choose)
+                else:
+                    metric_index = choose("Metric number: ", [m['name'] for m in metrics], ask, tell, minimum=1, maximum=1)[0]
+                    measures = sorted(RULE_MEASURES)
+                    measure = measures[choose("Measure number: ", measures, ask, tell, minimum=1, maximum=1)[0]]
+                    candidate = dict(name=name, metric=metrics[metric_index]['name'], measure=measure)
                 for bound in ('min', 'max'):
                     value = ask(f"{bound} (Enter for unbounded): ").strip()
                     if value:
                         candidate[bound] = value  # Preserve decimal input exactly in YAML.
                 try:
-                    validate_rules(rules + [candidate], {m['name'] for m in metrics})
+                    validate_rules(rules + [candidate], {m['name'] for m in metrics}, [[d] for d in dimensions] + groups, compared)
                 except InvestigationError as exc:
                     tell(str(exc) + "; please enter the rule again.")
                 else:
+                    if advanced and yes_no("Export supporting raw records if this rule fails? [y/N]: ", ask, tell):
+                        candidate['export'] = {'limit': positive_limit(ask, tell)}
                     rules.append(candidate)
             cfg = dict(mode='snapshots', **paths, key=key, metrics=metrics, dimensions=dimensions,
                        dimension_groups=groups, rules=rules, report={'include_raw_rows': False})
+            cfg.update(options)
             # Validate the exact saved configuration and run arithmetic checks against
             # the already loaded snapshots. Only publish once every metric passes.
             with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.yaml',
@@ -137,20 +148,25 @@ def init_config(reference, current, out='comparison.yaml', *, ask=None, tell=pri
                 temp = Path(stream.name)
                 yaml.safe_dump(cfg, stream, sort_keys=False, allow_unicode=True)
             cfg = load_config(temp)
-            validate_loaded(con, cfg, profiles, con.execute)
-            tell("Validating selected metrics and breakdowns...")
-            for i, metric in enumerate(metrics):
-                con.execute(f'CREATE SCHEMA wizard_{i}')
-                con.execute(f"SET schema = 'wizard_{i}'")
-                for side in paths:
-                    con.execute(f'CREATE VIEW {side} AS SELECT * FROM main.{side}')
-                compare(con, dict(cfg, metric=metric), profiles, con.execute)
+            contract = check_schema(cfg.get('schema'), profiles)
+            if contract['status'] == 'failed':
+                tell("Schema contract does not match the current inputs. Investigating this configuration will produce a schema-only report (exit 4).")
+            if contract['status'] != 'failed':
+                validate_loaded(con, cfg, profiles, con.execute)
+                tell("Validating selected metrics and breakdowns...")
+                for i, metric in enumerate(metrics):
+                    con.execute(f'CREATE SCHEMA wizard_{i}')
+                    con.execute(f"SET schema = 'wizard_{i}'")
+                    for side in paths:
+                        con.execute(f'CREATE VIEW {side} AS SELECT * FROM main.{side}')
+                    compare(con, dict(cfg, metric=metric), profiles, con.execute)
             if any(before[s] != profiles[s]['sha256'] or before[s] != fingerprint(paths[s]) for s in paths):
                 raise InvestigationError("Input changed during setup; rerun with stable snapshots")
             # A same-directory hard link publishes a complete file without replacing
             # an existing file, including one created while prompts were open.
             os.link(temp, target)
-        tell(f"Configuration written: {target}. Raw exports are disabled.")
+        enabled = cfg['report']['include_raw_rows'] or cfg['report']['evidence_exports'] or any('export' in r for r in rules)
+        tell(f"Configuration written: {target}. Raw exports are {'enabled as selected' if enabled else 'disabled'}.")
         tell(f'Next: delta-detective investigate "{target}" --out investigation')
         return target
     except (EOFError, KeyboardInterrupt):

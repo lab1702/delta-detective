@@ -15,7 +15,7 @@ def run_wizard(tmp_path, answers, **kwargs):
     answers = iter(answers)
     messages = []
     path = init_config(tmp_path/'reference.parquet', tmp_path/'current.parquet', tmp_path/'new.yaml',
-                       ask=lambda prompt: next(answers), tell=messages.append, **kwargs)
+                       ask=lambda prompt: '' if prompt.startswith('Configure schema,') else next(answers), tell=messages.append, **kwargs)
     return path, messages
 
 
@@ -109,6 +109,8 @@ def test_concurrent_output_creation_is_not_overwritten(tmp_path):
     target = tmp_path/'new.yaml'
     answers = iter(['1', '1', '', '', '', ''])
     def ask(prompt):
+        if prompt.startswith('Configure schema,'):
+            return ''
         if not target.exists():
             target.write_text('another writer')
         return next(answers)
@@ -126,7 +128,7 @@ def test_cli_csv_roundtrip_and_eof(tmp_path):
            str(tmp_path/'current.csv'), '--out', str(target)]
     cancelled = subprocess.run(cmd, input='', capture_output=True, text=True)
     assert cancelled.returncode == 2 and 'cancelled' in cancelled.stderr and 'Traceback' not in cancelled.stderr
-    result = subprocess.run(cmd, input='1\n2\n\n2\n\n\n', capture_output=True, text=True)
+    result = subprocess.run(cmd, input='1\n2\n\n2\n\n\n\n', capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert investigate(target, tmp_path/'out')['summary']['delta'] == -2
 
@@ -144,6 +146,8 @@ def test_input_mutation_is_detected(tmp_path):
     setup(tmp_path, [], [])
     answers = iter(['1', '1', '', '', '', ''])
     def ask(prompt):
+        if prompt.startswith('Configure schema,'):
+            return ''
         if prompt.startswith('Rule name'):
             with (tmp_path/'current.parquet').open('ab') as stream:
                 stream.write(b'changed')

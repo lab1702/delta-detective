@@ -52,9 +52,27 @@ delta-detective init reference.csv current.csv --out comparisons/orders.yaml
 The wizard displays column names and types from both snapshots, then offers
 numbered menus for key columns, count/sum metrics, dimensions, and combined
 dimension groups. Enter comma-separated numbers for multiple selections. Choose
-metric names and optionally add threshold rules by selecting a metric, measure,
-and inclusive minimum/maximum. Blank optional selections skip that step; EOF or
+metric names and optionally add threshold rules with inclusive minimum/maximum
+bounds. Blank optional selections skip that step; EOF or
 Ctrl+C cancels without writing a configuration.
+
+Answer yes to **Configure schema, field comparisons, scoped rules, or exports?**
+to enable the expanded options. Enter skips them and keeps the basic setup flow.
+The expanded menus let you:
+
+- Select required schema columns, accept or override their inferred types, or use
+  `*` for presence only; add additional required column names and optionally reject
+  extra columns. Inferred types are suggestions, not a guarantee of correctness.
+- Choose supported non-key comparison fields. Nonfinite floating-point fields
+  are excluded, while null-valued fields remain available.
+- Enable full or focused raw exports and set positive row limits for focused
+  selections. Enter leaves all exports disabled. Full exports include all rows.
+- Choose an overall metric, a configured dimension/group, or a compared field as
+  a rule target. Field measure menus omit incompatible blank/direction measures.
+- Optionally restrict a segment rule using typed JSON scalar selectors, such as
+  `"West"`, `12`, `true`, or `null`. Source category values are never enumerated.
+- Enable supporting-record exports for individual failed rules, with a limit
+  defaulting to 100. Export choices are explicit and default to no.
 
 Candidate single-column keys are checked for uniqueness and nulls in both complete
 snapshots. You must select the logical key yourself: uniqueness does not establish
@@ -66,10 +84,13 @@ displayed. CSV inference has the same limitations described below, including
 numeric-looking identifiers; use typed Parquet to preserve those identifiers.
 
 The wizard uses the investigation loader and runs validation and reconciliation
-for every selected metric and breakdown before saving. This scans full inputs
+for every selected metric and breakdown before saving when the schema contract
+passes or is absent. If a declared contract conflicts with the current inputs,
+the wizard warns and saves it for a schema-only investigation (exit 4), skipping
+metric validation just as `investigate` does. This scans full inputs
 and can take time on large datasets; it is not a schema-only preview. It writes
 one UTF-8 YAML file (default `comparison.yaml`) with absolute input paths and raw
-exports disabled. Existing files are never overwritten. No report bundle is
+exports disabled unless explicitly selected. Existing files are never overwritten. No report bundle is
 created until you run `investigate`. Threshold rules are validated as configuration;
 their pass/fail results are reported during the investigation.
 
@@ -149,8 +170,8 @@ bundle only with `--overwrite`, through the same staged publication as a success
 comparison. Passing a contract does not bypass the existing duplicate/null key,
 selected-type compatibility, metric, or reconciliation checks.
 
-Add this section to YAML after running `init`; the wizard does not generate
-contracts automatically. Contracts need no previous run or stored baseline.
+Configure contracts through the expanded `init` options or directly in YAML.
+Contracts need no previous run or stored baseline.
 
 ### Multiple metrics, combined dimensions, and focused exports
 
@@ -275,8 +296,8 @@ column order. CSV null/empty rendering has the same ambiguity as other raw expor
 SQL replay retains typed evidence. Field changes do not trigger threshold rules
 or change exit codes by themselves; use field rules below to enforce limits.
 
-Add `compare_fields` to YAML after using `init`; the wizard does not select these
-fields yet. Only the current run's two snapshots are needed.
+Select comparison fields through the expanded `init` options or directly in YAML.
+Only the current run's two snapshots are needed.
 
 ### Field-level threshold rules
 
@@ -328,7 +349,7 @@ to `main.field_N` and `main.field_overview`. HTML and CLI also show the count an
 matched-record denominator. Failed or undefined field rules use the existing
 overall failure status and opt-in `--fail-on-rule-violation` exit code 3 after the
 bundle is saved. Raw field values remain excluded unless exports are enabled.
-The `init` wizard still authors metric rules; add field rules in YAML.
+The expanded `init` options can author field rules and their evidence exports.
 
 ### Rule-specific evidence exports
 
@@ -571,8 +592,8 @@ schema, where N is the rule's zero-based position in configuration; `g0`, `g1`,
 etc. follow `group_by` order. These tables include all actual segments before the
 optional Python selector and threshold evaluation. Source keys are not exposed.
 
-Add segment scopes to YAML after using `init`; the wizard currently authors
-overall rules. Each investigation remains standalone and uses only its configured
+Choose segment scopes through the expanded `init` options or directly in YAML.
+Each investigation remains standalone and uses only its configured
 reference and current snapshots. No history store or GitHub Actions is needed.
 
 Selected columns must have exactly matching DuckDB types across snapshots.
