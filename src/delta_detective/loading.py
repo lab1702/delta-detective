@@ -1,7 +1,7 @@
 import hashlib
 import re
 from pathlib import Path
-from .config import InvestigationError
+from .config import InvestigationError, configured_metrics, selected_dimensions
 
 
 def ident(value):
@@ -19,6 +19,8 @@ def fingerprint(path):
 
 def load_and_validate(con, cfg, execute):
     profiles = {}
+    metrics = configured_metrics(cfg)
+    required = cfg["key"] + selected_dimensions(cfg) + [m["column"] for m in metrics if m["aggregate"] == "sum"]
     for side in ("reference", "current"):
         path = cfg[side]
         parsing = {"format": Path(path).suffix[1:], "hive_partitioning": False}
@@ -48,7 +50,6 @@ def load_and_validate(con, cfg, execute):
             source = f"read_parquet({literal(path)}, hive_partitioning=false)"
         execute(f"CREATE TABLE {side} AS SELECT * FROM {source}")
         schema = {r[0]: r[1] for r in con.execute(f"DESCRIBE {side}").fetchall()}
-        required = cfg["key"] + cfg["dimensions"] + ([cfg["metric"]["column"]] if cfg["metric"]["aggregate"] == "sum" else [])
         missing = set(required) - schema.keys()
         if missing:
             raise InvestigationError(f"{side}: missing required columns {sorted(missing)}; check CSV header and inferred schema")
@@ -56,15 +57,16 @@ def load_and_validate(con, cfg, execute):
         keys = ",".join(map(ident, cfg["key"]))
         execute(f"SELECT CASE WHEN EXISTS (SELECT 1 FROM {side} WHERE {nulls}) THEN error('{side}: null key component') ELSE true END")
         execute(f"SELECT CASE WHEN EXISTS (SELECT 1 FROM {side} GROUP BY {keys} HAVING count(*)>1) THEN error('{side}: duplicate keys') ELSE true END")
-        if cfg["metric"]["aggregate"] == "sum":
-            col = cfg["metric"]["column"]
-            typ = schema[col]
-            numeric = typ in ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT", "FLOAT", "DOUBLE") or typ.startswith("DECIMAL(")
-            if not numeric:
-                raise InvestigationError(f"{side}: sum column must be numeric; inferred {typ}. Use typed Parquet for exact decimals; repair malformed CSV values upstream.")
-            execute(f"SELECT CASE WHEN EXISTS (SELECT 1 FROM {side} WHERE {ident(col)} IS NULL OR NOT isfinite({ident(col)})) THEN error('{side}: null or nonfinite metric') ELSE true END")
+        for metric in metrics:
+            if metric["aggregate"] == "sum":
+                col = metric["column"]
+                typ = schema[col]
+                numeric = typ in ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT", "FLOAT", "DOUBLE") or typ.startswith("DECIMAL(")
+                if not numeric:
+                    raise InvestigationError(f"{side}: sum column must be numeric; inferred {typ}. Use typed Parquet for exact decimals; repair malformed CSV values upstream.")
+                execute(f"SELECT CASE WHEN EXISTS (SELECT 1 FROM {side} WHERE {ident(col)} IS NULL OR NOT isfinite({ident(col)})) THEN error('{side}: null or nonfinite metric') ELSE true END")
         profiles[side] = {"schema": schema, "sha256": fingerprint(path), "parsing": parsing}
-    for col in cfg["key"] + cfg["dimensions"] + ([cfg["metric"]["column"]] if cfg["metric"]["aggregate"] == "sum" else []):
+    for col in required:
         a, b = (profiles[s]["schema"][col] for s in ("reference", "current"))
         if a != b:
             raise InvestigationError(f"Incompatible selected column types for {col!r}: {a} / {b}. Supply matching explicit types in Parquet; no implicit coercion is performed.")
@@ -72,7 +74,7 @@ def load_and_validate(con, cfg, execute):
         typ = profiles["reference"]["schema"][col]
         if typ in ("FLOAT", "DOUBLE") or any(x in typ for x in ("[", "STRUCT", "MAP", "UNION")):
             raise InvestigationError(f"Unsupported key type {typ}; use exact scalar keys")
-    for col in cfg["dimensions"]:
+    for col in selected_dimensions(cfg):
         typ = profiles["reference"]["schema"][col]
         scalar_types = {"VARCHAR", "BOOLEAN", "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
                         "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT"}

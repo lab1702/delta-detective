@@ -4,7 +4,7 @@ Two datasets in. A reconciled difference and an inspectable trail of evidence ou
 
 A local Python CLI for comparing **two versions of the same logical dataset**.
 DuckDB performs loading, validation, joins, and aggregation. Python receives only
-bounded summaries (at most 51 rows per dimension), never the full datasets.
+bounded summaries (at most 51 rows per breakdown per metric), never the full datasets.
 No service, network calls, telemetry, pandas, or generated explanations are used.
 
 ## Install and run
@@ -62,6 +62,70 @@ For **COUNT(*)**, replace the metric with `{name: rows, aggregate: count}`;
 neither `column` nor `null_policy` is allowed. `dimensions` defaults to `[]` and
 raw evidence defaults to false. Keys cannot also be metrics or dimensions,
 to avoid exposing key values in aggregate reports.
+
+### Multiple metrics, combined dimensions, and focused exports
+
+Use `metrics` instead of `metric` to compare several measurements in one bundle.
+Existing single-metric configurations continue to work. This example can also
+be used with the generated demo inputs:
+
+```yaml
+mode: snapshots
+reference: reference.parquet
+current: current.parquet
+key: [order_id]
+metrics:
+  - name: net_sales
+    aggregate: sum
+    column: net_amount
+    null_policy: error
+  - name: orders
+    aggregate: count
+dimensions: [region, source]
+dimension_groups:
+  - [region, source]
+report:
+  evidence_exports:
+    - kind: removed
+    - kind: largest_changes
+      limit: 25
+```
+
+Metric names must be unique; specify exactly one of `metric` or `metrics`.
+Every metric has its own arithmetic checks, contribution tables, and HTML/CLI
+summary. All selected metrics must validate for the bundle to succeed. Inputs
+are loaded once; joins and aggregations run separately per metric, so additional
+metrics increase memory and execution costs.
+
+`dimension_groups` contains lists of at least two distinct column names. Group
+columns need not also appear in `dimensions`. Each group reconciles independently
+and retains the top 50 combinations plus an explicit Other remainder. Combined
+categories are structured objects in JSON, preserving component types and nulls.
+Reclassification counts for a group count each matched key once if any component
+changed. Do not add contributions across breakdowns or across different metrics.
+
+`evidence_exports` explicitly opts into exporting raw keys and selected fields,
+even when `include_raw_rows` is false. Each requested selection is exported for
+each metric:
+
+| Kind | Selection |
+| --- | --- |
+| `added` | Keys present only in the current snapshot |
+| `removed` | Keys present only in the reference snapshot |
+| `changed` | Matched keys whose metric value changed; excludes category-only moves |
+| `largest_changes` | Nonzero row contributions across additions, removals, and matches |
+
+Focused exports include a signed `contribution` column. They sort by absolute
+contribution descending, with configured key columns as deterministic tie breakers.
+Each kind accepts an optional positive integer `limit`; `largest_changes` defaults
+to 100, while other kinds default to all qualifying rows. Empty selections still
+produce a CSV header. Count metrics have no matched metric changes.
+
+With one metric, files are named `removed_rows.csv`, `largest_changes_rows.csv`,
+and so on. With multiple metrics, each filename starts with its zero-based metric
+index, such as `metric_0_removed_rows.csv`. `include_raw_rows: true` independently
+adds the full `raw_rows.csv` export (with the same prefix rule). The report and
+manifest list every exported file, metric, selection, limit, and row count.
 
 Selected columns must have exactly matching DuckDB types across snapshots.
 Floating-point and nested key types are rejected. Dimensions accept strings,
@@ -144,7 +208,11 @@ Run `analysis.sql` in a **fresh DuckDB database** with the matching inputs at th
 recorded absolute paths. Input datasets are not copied into the bundle. Replay
 materializes `reconciliation`, `dimension_N`, `dimension_N_display`, and
 `reclassification_N`; the complete dimension table remains queryable even when
-the report is truncated. Python checks the returned residuals and identities
+the report is truncated. For multiple metrics, the first metric uses the `main`
+schema and subsequent metrics use `metric_1`, `metric_2`, etc. Use qualified names
+such as `metric_1.reconciliation`. Requested focused selections are replayable as
+`evidence_removed`, `evidence_largest_changes`, etc., in the corresponding schema;
+replay does not write CSV exports. Python checks the returned residuals and identities
 before marking a bundle successful. Replay SQL reproduces the measurements;
 it does not regenerate the HTML/JSON or recheck checksums. The manifest's hashes
 allow independently verifying that the same input bytes were used.
@@ -152,7 +220,9 @@ allow independently verifying that the same input bytes were used.
 Raw rows and key values are excluded by default. `include_raw_rows: true` adds a
 streamed `raw_rows.csv` containing **all joined keys and selected fields**, not all
 source columns. `kN` follows configured key order; `rv`/`cv` are reference/current
-metric values (`1` for count); `rdN`/`cdN` follow dimension order; `rp`/`cp` indicate
+metric values (`1` for count); `rdN`/`cdN` follow dimension order, then any additional
+group columns in first-use order (recorded as `raw_evidence.selected_dimensions`
+in the manifest); `rp`/`cp` indicate
 side presence. Missing-side fields are empty. CSV null and empty-text rendering
 can be ambiguous; use the replay database for typed evidence. Aggregate-only
 reports are **not anonymous**: category values, totals, schemas and input paths
@@ -180,6 +250,12 @@ from delta_detective import investigate
 findings = investigate("demo-data/comparison.yaml", "investigation")
 print(findings["summary"]["delta"])
 ```
+
+`findings["metrics"]` contains one result per configured metric, including its
+definition, summary, findings, dimensions, reclassifications, and SQL schema.
+Legacy top-level summary/findings/dimensions/reclassifications and the manifest's
+`reconciliation` describe the first metric. The manifest's `metric_reconciliations`
+contains all metric checks. `findings["evidence_exports"]` lists raw exports.
 
 Modules separate configuration, loading/profiling, comparison, findings,
 reporting, CLI, and demo generation. Dependencies are DuckDB, PyYAML and Jinja2;

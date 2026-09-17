@@ -41,31 +41,53 @@ def load_config(path):
         cfg = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise InvestigationError(f"Cannot read configuration: {exc}") from exc
-    fields(cfg, ["mode", "reference", "current", "key", "metric", "dimensions", "report"],
-           ["mode", "reference", "current", "key", "metric"], "configuration")
+    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report"],
+           ["mode", "reference", "current", "key"], "configuration")
     if cfg["mode"] != "snapshots":
         raise InvestigationError("Only mode: snapshots is supported")
     names(cfg["key"], "key", True)
     cfg.setdefault("dimensions", [])
     names(cfg["dimensions"], "dimensions")
-    if set(cfg["key"]) & set(cfg["dimensions"]):
+    cfg.setdefault("dimension_groups", [])
+    groups = cfg["dimension_groups"]
+    if not isinstance(groups, list):
+        raise InvestigationError("dimension_groups must be a list of column lists")
+    for group in groups:
+        names(group, "dimension group", True)
+        if len(group) < 2:
+            raise InvestigationError("Each dimension group requires at least two columns")
+    if len({frozenset(g) for g in groups}) != len(groups):
+        raise InvestigationError("Duplicate dimension groups")
+    if set(cfg["key"]) & set(selected_dimensions(cfg)):
         raise InvestigationError("Key columns cannot be dimensions (keys are private by default)")
-    metric = cfg["metric"]
-    fields(metric, ["name", "aggregate", "column", "null_policy"], ["name", "aggregate"], "metric")
-    if not isinstance(metric["name"], str) or not metric["name"]:
-        raise InvestigationError("metric.name must be nonempty text")
-    if metric["aggregate"] == "sum":
-        if not isinstance(metric.get("column"), str) or not metric["column"] or metric.get("null_policy") != "error":
-            raise InvestigationError("sum requires column and null_policy: error")
-        if metric["column"] in cfg["key"]:
-            raise InvestigationError("A key cannot be the metric column")
-    elif metric["aggregate"] != "count" or "column" in metric or "null_policy" in metric:
-        raise InvestigationError("Use sum with column/null_policy, or count without either")
+    if ("metric" in cfg) == ("metrics" in cfg):
+        raise InvestigationError("Specify exactly one of metric or metrics")
+    metrics = cfg.get("metrics", [cfg.get("metric")])
+    if not isinstance(metrics, list) or not metrics:
+        raise InvestigationError("metrics must be a nonempty list")
+    for metric in metrics:
+        validate_metric(metric, cfg["key"])
+    if len({m["name"] for m in metrics}) != len(metrics):
+        raise InvestigationError("Metric names must be unique")
     cfg.setdefault("report", {})
-    fields(cfg["report"], ["include_raw_rows"], [], "report")
+    fields(cfg["report"], ["include_raw_rows", "evidence_exports"], [], "report")
     cfg["report"].setdefault("include_raw_rows", False)
     if type(cfg["report"]["include_raw_rows"]) is not bool:
         raise InvestigationError("include_raw_rows must be boolean")
+    exports = cfg["report"].setdefault("evidence_exports", [])
+    if not isinstance(exports, list):
+        raise InvestigationError("evidence_exports must be a list")
+    kinds = set()
+    for export in exports:
+        fields(export, ["kind", "limit"], ["kind"], "evidence export")
+        kind = export["kind"]
+        if not isinstance(kind, str) or kind not in ("added", "removed", "changed", "largest_changes") or kind in kinds:
+            raise InvestigationError("Evidence export kinds must be unique: added, removed, changed, largest_changes")
+        kinds.add(kind)
+        if kind == "largest_changes":
+            export.setdefault("limit", 100)
+        if "limit" in export and (type(export["limit"]) is not int or export["limit"] <= 0):
+            raise InvestigationError("Evidence export limit must be a positive integer")
     for side in ("reference", "current"):
         value = cfg[side]
         if not isinstance(value, str) or "://" in value or value.startswith(("//", "\\\\")):
@@ -79,3 +101,24 @@ def load_config(path):
             raise InvestigationError(f"{side}: expected an existing CSV or Parquet file: {resolved}")
         cfg[side] = str(resolved)
     return cfg
+
+
+def configured_metrics(cfg):
+    return cfg["metrics"] if "metrics" in cfg else [cfg["metric"]]
+
+
+def selected_dimensions(cfg):
+    return list(dict.fromkeys(cfg["dimensions"] + [c for g in cfg.get("dimension_groups", []) for c in g]))
+
+
+def validate_metric(metric, keys):
+    fields(metric, ["name", "aggregate", "column", "null_policy"], ["name", "aggregate"], "metric")
+    if not isinstance(metric["name"], str) or not metric["name"]:
+        raise InvestigationError("metric.name must be nonempty text")
+    if metric["aggregate"] == "sum":
+        if not isinstance(metric.get("column"), str) or not metric["column"] or metric.get("null_policy") != "error":
+            raise InvestigationError("sum requires column and null_policy: error")
+        if metric["column"] in keys:
+            raise InvestigationError("A key cannot be the metric column")
+    elif metric["aggregate"] != "count" or "column" in metric or "null_policy" in metric:
+        raise InvestigationError("Use sum with column/null_policy, or count without either")

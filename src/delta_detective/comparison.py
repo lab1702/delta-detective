@@ -1,7 +1,7 @@
 from decimal import Decimal, localcontext
 import math
 from .loading import ident
-from .config import InvestigationError
+from .config import InvestigationError, selected_dimensions
 
 ABS_TOL = 1e-9
 REL_TOL = 1e-12
@@ -34,7 +34,7 @@ def compare(con, cfg, profiles, execute):
     else:
         cast = "DOUBLE" if approximate else "HUGEINT"
     val = f"CAST({ident(metric['column'])} AS {cast})" if is_sum else "1::HUGEINT"
-    dims = cfg["dimensions"]
+    dims = selected_dimensions(cfg)
     key_fields = [f"{ident(k)} AS k{i}" for i, k in enumerate(cfg["key"])]
     dim_fields = [f"{ident(d)} AS d{i}" for i, d in enumerate(dims)]
     for side in ("reference", "current"):
@@ -71,11 +71,16 @@ def compare(con, cfg, profiles, execute):
     summary["empty_populations"] = [s for s in ("reference", "current", "added", "removed", "matched") if summary[s+"_rows"] == 0]
     breakdowns = []
     reclassifications = []
-    for i, name in enumerate(dims):
+    groups = [[d] for d in cfg["dimensions"]] + cfg.get("dimension_groups", [])
+    for i, group in enumerate(groups):
+        name = " × ".join(group)
+        indices = [dims.index(d) for d in group]
+        category = f"d{indices[0]}" if len(group) == 1 else "struct_pack(" + ", ".join(f"{ident(d)} := d{j}" for d, j in zip(group, indices)) + ")"
+        moved = " OR ".join(f"rd{j} IS DISTINCT FROM cd{j}" for j in indices)
         table = f"dimension_{i}"
         execute(f"""CREATE TABLE {table} AS WITH r AS (
-            SELECT d{i} AS category, count(*) AS n, sum(v) AS total FROM reference_selected GROUP BY d{i}),
-          c AS (SELECT d{i} AS category, count(*) AS n, sum(v) AS total FROM current_selected GROUP BY d{i})
+            SELECT {category} AS category, count(*) AS n, sum(v) AS total FROM reference_selected GROUP BY {category}),
+          c AS (SELECT {category} AS category, count(*) AS n, sum(v) AS total FROM current_selected GROUP BY {category})
           SELECT CASE WHEN r.n IS NOT NULL THEN r.category ELSE c.category END AS category,
             coalesce(r.n,0) AS reference_rows, coalesce(c.n,0) AS current_rows,
             coalesce(r.total,0) AS reference_total, coalesce(c.total,0) AS current_total,
@@ -96,11 +101,11 @@ def compare(con, cfg, profiles, execute):
         total, magnitude = con.execute(f"SELECT coalesce(sum(contribution),0), {magnitude_sql} FROM {table}").fetchone()
         status = check(summary["reference_total"], summary["current_total"], [total], approximate, magnitude)
         check(summary["reference_total"], summary["current_total"], [r["contribution"] for r in rows], approximate, magnitude)
-        breakdowns.append({"name": name, "rows": rows, "check": status, "evidence": table + "_display"})
+        breakdowns.append({"name": name, "columns": group, "rows": rows, "check": status, "evidence": table + "_display"})
         execute(f"""CREATE TABLE reclassification_{i} AS SELECT count(*) AS rows,
           count(*) FILTER (WHERE rv IS DISTINCT FROM cv) AS also_metric_changed,
           coalesce(sum(rv),0) AS reference_amount, coalesce(sum(cv),0) AS current_amount
-          FROM joined WHERE rp AND cp AND rd{i} IS DISTINCT FROM cd{i}""")
+          FROM joined WHERE rp AND cp AND ({moved})""")
         r = con.execute(f"SELECT * FROM reclassification_{i}").fetchone()
         reclassifications.append(dict(zip(["rows", "also_metric_changed", "reference_amount", "current_amount"], r), name=name, evidence=f"reclassification_{i}"))
     return summary, breakdowns, reclassifications

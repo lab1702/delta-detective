@@ -19,12 +19,16 @@ def main(argv=None):
         if args.command == "demo":
             print(f"Demo configuration: {demo(args.out, args.overwrite)}")
         else:
-            result = investigate(args.config, args.out, args.overwrite)["summary"]
-            print(f"Reference: {result['reference_total']}\nCurrent: {result['current_total']}\nAbsolute change: {result['delta']}")
-            print("Relative change: " + (f"{result['percent_change']}%" if result['percent_change'] is not None else "undefined (zero reference)"))
-            for kind in ("added", "removed", "matched"):
-                print(f"{kind}: {result[kind+'_rows']} rows; contribution {result[kind+'_contribution']}")
-            print(f"Reconciliation: {result['status']} ({'exact' if result['exact'] else 'approximate'}), residual {result['residual']}\nReport: {args.out}/report.html")
+            data = investigate(args.config, args.out, args.overwrite)
+            for item in data["metrics"]:
+                result = item["summary"]
+                print(f"Metric: {item['metric']['name']}")
+                print(f"Reference: {result['reference_total']}\nCurrent: {result['current_total']}\nAbsolute change: {result['delta']}")
+                print("Relative change: " + (f"{result['percent_change']}%" if result['percent_change'] is not None else "undefined (zero reference)"))
+                for kind in ("added", "removed", "matched"):
+                    print(f"{kind}: {result[kind+'_rows']} rows; contribution {result[kind+'_contribution']}")
+                print(f"Reconciliation: {result['status']} ({'exact' if result['exact'] else 'approximate'}), residual {result['residual']}")
+            print(f"Report: {args.out}/report.html")
         return 0
     except (InvestigationError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

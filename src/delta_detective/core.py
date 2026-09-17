@@ -3,7 +3,7 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 import duckdb
-from .config import load_config, InvestigationError
+from .config import load_config, InvestigationError, configured_metrics, selected_dimensions
 from .loading import load_and_validate, fingerprint, literal
 from .comparison import compare
 from .findings import build_findings, dumps, LIMITATIONS
@@ -39,28 +39,58 @@ def investigate(config, out, overwrite=False):
     try:
         before = {s: fingerprint(cfg[s]) for s in ("reference", "current")}
         profiles = load_and_validate(con, cfg, execute)
-        summary, dimensions, reclassifications = compare(con, cfg, profiles, execute)
-        for s in profiles:
-            if before[s] != profiles[s]["sha256"] or fingerprint(cfg[s]) != before[s]:
-                raise InvestigationError("Input changed during analysis; rerun with stable snapshots")
         a, b = (profiles[s]["schema"] for s in ("reference", "current"))
         schema_changes = [{"column": c, "reference_type": a.get(c), "current_type": b.get(c)} for c in sorted(a.keys() | b.keys()) if a.get(c) != b.get(c)]
-        data = build_findings(summary, dimensions, reclassifications, schema_changes)
-        checks = ["Passed: required files/columns, null and duplicate keys, selected type compatibility, key-count identities, overall and independent dimension reconciliation.",
-                  "Passed: numeric, finite, non-null sum values." if cfg["metric"]["aggregate"] == "sum" else "Skipped: numeric metric validation (COUNT(*) selected).",
+        results = []
+        evidence = []
+        metrics = configured_metrics(cfg)
+        checks = ["Passed: required files/columns, null and duplicate keys, selected type compatibility, key-count identities, overall and independent dimension reconciliation for every metric.",
+                  "Passed: numeric, finite, non-null values for all sum metrics (not applicable to COUNT(*)).",
                   "Ran: schema comparison (see below). Unrelated schema changes are informational.",
                   "Skipped: comparisons of nonselected row attributes; operational-cause investigation."]
-        data["validation"] = checks
-        replay = ["SELECT * FROM reconciliation;"] + [f"SELECT * FROM dimension_{i}_display ORDER BY rank;\nSELECT * FROM reclassification_{i};" for i in range(len(dimensions))]
+        for index, metric in enumerate(metrics):
+            # The first metric retains legacy table names in main. Each additional
+            # metric has an isolated namespace and reads the same loaded snapshots.
+            namespace = "main" if index == 0 else f"metric_{index}"
+            if index:
+                execute(f"CREATE SCHEMA {namespace}")
+            execute(f"SET schema = '{namespace}'")
+            # Explicit views avoid depending on DuckDB's search path for inputs.
+            if index:
+                for side in ("reference", "current"):
+                    execute(f"CREATE VIEW {side} AS SELECT * FROM main.{side}")
+            metric_cfg = dict(cfg, metric=metric)
+            summary, dimensions, reclassifications = compare(con, metric_cfg, profiles, execute)
+            item = build_findings(summary, dimensions, reclassifications, schema_changes)
+            for finding in item["findings"]:
+                finding["evidence"] = f"analysis.sql: {namespace}.reconciliation"
+            for finding in dimensions + reclassifications:
+                finding["evidence"] = namespace + "." + finding["evidence"]
+            item.update(metric=metric, validation=checks, sql_schema=namespace)
+            results.append(item)
+            evidence.extend(export_evidence(con, execute, cfg, stage, index, len(metrics)))
+        for side in profiles:
+            if before[side] != profiles[side]["sha256"] or fingerprint(cfg[side]) != before[side]:
+                raise InvestigationError("Input changed during analysis; rerun with stable snapshots")
+        data = dict(results[0])  # Legacy top-level fields refer to the first metric.
+        data["metrics"] = results
+        data["evidence_exports"] = evidence
+        summary = data["summary"]
+        replay = []
+        for item in results:
+            ns = item["sql_schema"]
+            replay.append(f"SELECT * FROM {ns}.reconciliation;")
+            for i in range(len(item["dimensions"])):
+                replay.append(f"SELECT * FROM {ns}.dimension_{i}_display ORDER BY rank; SELECT * FROM {ns}.reclassification_{i};")
         sql = "-- Run in a fresh DuckDB database; matching input files are required.\n" + "\n\n".join(statements + replay)
-        if cfg["report"]["include_raw_rows"]:
-            con.execute(f"COPY joined TO {literal(stage / 'raw_rows.csv')} (HEADER, FORMAT CSV)")
         manifest = {"application_version": "0.1.0", "duckdb_version": duckdb.__version__,
                     "created_utc": datetime.now(timezone.utc).isoformat(), "configuration": cfg,
                     "inputs": profiles, "execution_status": "success", "reconciliation": {k: summary[k] for k in ("status", "exact", "residual", "tolerance")},
                     "validation": checks, "assumptions_and_limitations": LIMITATIONS,
-                    "raw_evidence": {"included": cfg["report"]["include_raw_rows"],
-                        "contents": "All joined keys: kN key columns in configured order; rv/cv metric values; rdN/cdN dimensions in configured order; rp/cp side presence. Only selected fields, not full source rows."}}
+                    "metric_reconciliations": [{"name": item["metric"]["name"], "sql_schema": item["sql_schema"],
+                        **{k: item["summary"][k] for k in ("status", "exact", "residual", "tolerance")}} for item in results],
+                    "raw_evidence": {"included": bool(evidence), "exports": evidence, "selected_dimensions": selected_dimensions(cfg),
+                        "contents": "Per metric: kN keys in configured order; rv/cv metric values; rdN/cdN dimensions in selected_dimensions order; rp/cp side presence. Focused exports also include contribution. Only selected fields, not full source rows."}}
         for filename, content in [("findings.json", dumps(data)), ("manifest.json", dumps(manifest)),
                                   ("analysis.sql", sql), ("report.html", render(cfg, data, checks, sql, dumps({"changes": schema_changes, "inputs": profiles})))]:
             (stage / filename).write_text(content, encoding="utf-8")
@@ -97,3 +127,33 @@ def publish(stage, out):
     if backup is not None:
         # Publication succeeded. A locked backup must not turn success into failure.
         shutil.rmtree(backup, ignore_errors=True)
+
+
+def export_evidence(con, execute, cfg, stage, metric_index, metric_count):
+    """Stream opt-in evidence; record reproducible selection views, never COPY paths."""
+    exports = []
+    prefix = "" if metric_count == 1 else f"metric_{metric_index}_"
+    requests = ([{"kind": "all"}] if cfg["report"]["include_raw_rows"] else []) + cfg["report"]["evidence_exports"]
+    for request in requests:
+        kind = request["kind"]
+        filename = prefix + ("raw_rows.csv" if kind == "all" else f"{kind}_rows.csv")
+        if kind == "all":
+            query = "SELECT * FROM joined"
+            view = "joined"
+        else:
+            predicates = {"added": "rp IS NULL", "removed": "cp IS NULL",
+                          "changed": "rp AND cp AND rv IS DISTINCT FROM cv",
+                          "largest_changes": "coalesce(cv,0) IS DISTINCT FROM coalesce(rv,0)"}
+            keys = ", ".join(f"k{i}" for i in range(len(cfg["key"])))
+            query = f"SELECT *, coalesce(cv,0)-coalesce(rv,0) AS contribution FROM joined WHERE {predicates[kind]}"
+            query += f" ORDER BY abs(contribution) DESC, {keys}"
+            if "limit" in request:
+                query += f" LIMIT {request['limit']}"
+            view = f"evidence_{kind}"
+            execute(f"CREATE VIEW {view} AS {query}")
+        con.execute(f"COPY ({query}) TO {literal(stage / filename)} (HEADER, FORMAT CSV)")
+        exports.append({"file": filename, "metric": configured_metrics(cfg)[metric_index]["name"],
+                        "kind": kind, "limit": request.get("limit"),
+                        "rows": con.execute(f"SELECT count(*) FROM {view}").fetchone()[0],
+                        "evidence": ("main" if metric_index == 0 else f"metric_{metric_index}") + "." + view})
+    return exports
