@@ -45,6 +45,8 @@ def main(argv=None):
                     print(f"{kind}: {result[kind+'_rows']} rows; contribution {result[kind+'_contribution']}")
                 print(f"Reconciliation: {result['status']} ({'exact' if result['exact'] else 'approximate'}), residual {result['residual']}")
             print(f"Report: {args.out}/report.html")
+            for field in data['field_changes']['fields']:
+                print(f"Field {field['name']}: {field['changed_rows']} of {field['matched_rows']} matched records changed; became null={field['became_null']}; from null={field['from_null']}")
             print(f"Threshold rules: {data['rule_checks']['status']}")
             for rule in data["rule_checks"]["results"]:
                 bounds = ", ".join(f"{key}={rule[key]}" for key in ("min", "max") if key in rule)

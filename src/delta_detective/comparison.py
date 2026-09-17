@@ -37,12 +37,15 @@ def compare(con, cfg, profiles, execute):
     dims = selected_dimensions(cfg)
     key_fields = [f"{ident(k)} AS k{i}" for i, k in enumerate(cfg["key"])]
     dim_fields = [f"{ident(d)} AS d{i}" for i, d in enumerate(dims)]
+    fields = cfg.get('compare_fields', [])
+    field_columns = [f'{ident(c)} AS f{i}' for i, c in enumerate(fields)]
     for side in ("reference", "current"):
-        execute(f"CREATE TABLE {side}_selected AS SELECT {', '.join(key_fields + dim_fields)}, {val} AS v, true AS present FROM {side}")
+        execute(f"CREATE TABLE {side}_selected AS SELECT {', '.join(key_fields + dim_fields + field_columns)}, {val} AS v, true AS present FROM {side}")
     on = " AND ".join(f"r.k{i}=c.k{i}" for i in range(len(key_fields)))
     columns = ["r.present AS rp", "c.present AS cp", "r.v AS rv", "c.v AS cv"]
     columns += [f"coalesce(r.k{i},c.k{i}) AS k{i}" for i in range(len(key_fields))]
     columns += [x for i in range(len(dims)) for x in (f"r.d{i} AS rd{i}", f"c.d{i} AS cd{i}")]
+    columns += [x for i in range(len(fields)) for x in (f'r.f{i} AS rf{i}', f'c.f{i} AS cf{i}')]
     execute(f"CREATE TABLE joined AS SELECT {', '.join(columns)} FROM reference_selected r FULL OUTER JOIN current_selected c ON {on}")
     changed_dims = " OR ".join(f"rd{i} IS DISTINCT FROM cd{i}" for i in range(len(dims))) or "false"
     execute(f"""CREATE TABLE reconciliation AS SELECT

@@ -7,7 +7,7 @@ LIMITATIONS = [
     "These are versions of the same logical dataset, not reporting periods.",
     "Verified differences and arithmetic contributions do not establish operational causes, failures, or real-world changes.",
     "Dimensions are alternative views of the same change; never add contributions across dimensions.",
-    "Only keys, the selected metric, and selected dimensions are compared. Other row fields are not checked for changes.",
+    "Only selected metrics, dimensions, and compare_fields are compared after matching keys. Other row fields are not checked for changes.",
     "Aggregate-only reports are not anonymous: categories and totals may be sensitive.",
     "Rerunning analysis.sql requires matching input files at the recorded paths and a compatible DuckDB version.",
     "Selected column types must match exactly. CSV inference can interpret numeric-looking identifiers; use typed Parquet when identity or decimal precision matters.",

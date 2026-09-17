@@ -10,6 +10,7 @@ from .findings import build_findings, dumps, LIMITATIONS
 from .report import render
 from .rules import evaluate_rules
 from .schema import check_schema
+from .fields import compare_fields
 
 
 def prepare_output(out, overwrite, inputs=()):
@@ -70,6 +71,8 @@ def investigate(config, out, overwrite=False):
                     execute(f"CREATE VIEW {side} AS SELECT * FROM main.{side}")
             metric_cfg = dict(cfg, metric=metric)
             summary, dimensions, reclassifications = compare(con, metric_cfg, profiles, execute)
+            if index == 0:
+                field_changes = compare_fields(con, cfg, profiles, execute)
             item = build_findings(summary, dimensions, reclassifications, schema_changes)
             for finding in item["findings"]:
                 finding["evidence"] = f"analysis.sql: {namespace}.reconciliation"
@@ -86,11 +89,15 @@ def investigate(config, out, overwrite=False):
         data = dict(results[0])  # Legacy top-level fields refer to the first metric.
         data["metrics"] = results
         data["evidence_exports"] = evidence
+        data['field_changes'] = field_changes
         data['schema_checks'] = schema_checks
         data['execution_status'] = 'success'
         data["rule_checks"] = evaluate_rules(cfg["rules"], results, con, cfg, execute)
         summary = data["summary"]
         replay = []
+        if cfg['compare_fields']:
+            replay.append('SELECT * FROM main.field_overview;')
+            replay.extend(f'SELECT * FROM main.field_{i};' for i in range(len(cfg['compare_fields'])))
         for item in results:
             ns = item["sql_schema"]
             replay.append(f"SELECT * FROM {ns}.reconciliation;")
@@ -104,10 +111,11 @@ def investigate(config, out, overwrite=False):
                     "validation": checks, "assumptions_and_limitations": LIMITATIONS,
                     "rule_checks": data["rule_checks"],
                     "schema_checks": schema_checks,
+                    "field_changes": field_changes,
                     "metric_reconciliations": [{"name": item["metric"]["name"], "sql_schema": item["sql_schema"],
                         **{k: item["summary"][k] for k in ("status", "exact", "residual", "tolerance")}} for item in results],
-                    "raw_evidence": {"included": bool(evidence), "exports": evidence, "selected_dimensions": selected_dimensions(cfg),
-                        "contents": "Per metric: kN keys in configured order; rv/cv metric values; rdN/cdN dimensions in selected_dimensions order; rp/cp side presence. Focused exports also include contribution. Only selected fields, not full source rows."}}
+                    "raw_evidence": {"included": bool(evidence), "exports": evidence, "selected_dimensions": selected_dimensions(cfg), 'compare_fields': cfg['compare_fields'],
+                        "contents": "Per metric: kN keys in configured order; rv/cv metric values; rdN/cdN dimensions in selected_dimensions order; rfN/cfN compared fields in compare_fields order; rp/cp side presence. Focused exports also include contribution. Only selected fields, not full source rows."}}
         for filename, content in [("findings.json", dumps(data)), ("manifest.json", dumps(manifest)),
                                   ("analysis.sql", sql), ("report.html", render(cfg, data, checks, sql, dumps({"changes": schema_changes, "inputs": profiles})))]:
             (stage / filename).write_text(content, encoding="utf-8")
@@ -116,7 +124,7 @@ def investigate(config, out, overwrite=False):
     except duckdb.Error as exc:
         # Do not echo DuckDB's offending row/key values in default diagnostics.
         message = str(exc)
-        for reason in ("duplicate keys", "null key component", "null or nonfinite metric"):
+        for reason in ("duplicate keys", "null key component", "null or nonfinite metric", "nonfinite comparison field"):
             if reason in message:
                 side = "reference" if "reference:" in message else "current"
                 raise InvestigationError(f"{side}: {reason}; repair the source snapshot and rerun") from None
@@ -151,6 +159,7 @@ def publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements)
     data = dict(execution_status='schema_contract_failed', schema_checks=schema_checks,
                 metrics=[], summary=None, findings=[], dimensions=[], reclassifications=[],
                 evidence_exports=[], rule_checks={'status': 'not_evaluated', 'results': []},
+                field_changes={'status': 'not_evaluated', 'fields': []},
                 validation=checks, limitations=LIMITATIONS)
     sql = '-- Schema-only run. Replay loads snapshots; Python evaluates the schema contract.\n' + '\n\n'.join(
         statements + ['DESCRIBE main.reference;', 'DESCRIBE main.current;'])
@@ -158,6 +167,7 @@ def publish_schema_failure(stage, out, cfg, profiles, schema_checks, statements)
                     created_utc=datetime.now(timezone.utc).isoformat(), configuration=cfg,
                     inputs=profiles, execution_status=data['execution_status'], schema_checks=schema_checks,
                     reconciliation=None, metric_reconciliations=[], rule_checks=data['rule_checks'],
+                    field_changes=data['field_changes'],
                     validation=checks, raw_evidence={'included': False, 'exports': []},
                     assumptions_and_limitations=LIMITATIONS)
     for filename, content in [('findings.json', dumps(data)), ('manifest.json', dumps(manifest)),
@@ -181,9 +191,11 @@ def export_evidence(con, execute, cfg, stage, metric_index, metric_count):
         else:
             changed_dimensions = " OR ".join(
                 f"rd{i} IS DISTINCT FROM cd{i}" for i in range(len(selected_dimensions(cfg)))) or "false"
+            changed_fields = ' OR '.join(f'rf{i} IS DISTINCT FROM cf{i}' for i in range(len(cfg['compare_fields']))) or 'false'
             predicates = {"added": "rp IS NULL", "removed": "cp IS NULL",
                           "changed": "rp AND cp AND rv IS DISTINCT FROM cv",
                           "moved": f"rp AND cp AND ({changed_dimensions})",
+                          'field_changed': f'rp AND cp AND ({changed_fields})',
                           "largest_changes": "coalesce(cv,0) IS DISTINCT FROM coalesce(rv,0)"}
             keys = ", ".join(f"k{i}" for i in range(len(cfg["key"])))
             query = f"SELECT *, coalesce(cv,0)-coalesce(rv,0) AS contribution FROM joined WHERE {predicates[kind]}"

@@ -43,7 +43,7 @@ def load_config(path):
         cfg = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise InvestigationError(f"Cannot read configuration: {exc}") from exc
-    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema"],
+    fields(cfg, ["mode", "reference", "current", "key", "metric", "metrics", "dimensions", "dimension_groups", "report", "rules", "schema", "compare_fields"],
            ["mode", "reference", "current", "key"], "configuration")
     if cfg["mode"] != "snapshots":
         raise InvestigationError("Only mode: snapshots is supported")
@@ -67,6 +67,10 @@ def load_config(path):
             except (duckdb.Error, ValueError):
                 raise InvestigationError(f'Invalid schema type for column {column!r}') from None
     names(cfg["key"], "key", True)
+    cfg.setdefault('compare_fields', [])
+    names(cfg['compare_fields'], 'compare_fields')
+    if set(cfg['key']) & set(cfg['compare_fields']):
+        raise InvestigationError('Key columns cannot be compare_fields')
     cfg.setdefault("dimensions", [])
     names(cfg["dimensions"], "dimensions")
     cfg.setdefault("dimension_groups", [])
@@ -104,8 +108,10 @@ def load_config(path):
     for export in exports:
         fields(export, ["kind", "limit"], ["kind"], "evidence export")
         kind = export["kind"]
-        if not isinstance(kind, str) or kind not in ("added", "removed", "changed", "moved", "largest_changes") or kind in kinds:
-            raise InvestigationError("Evidence export kinds must be unique: added, removed, changed, moved, largest_changes")
+        if not isinstance(kind, str) or kind not in ("added", "removed", "changed", "moved", "largest_changes", "field_changed") or kind in kinds:
+            raise InvestigationError("Evidence export kinds must be unique: added, removed, changed, moved, largest_changes, field_changed")
+        if kind == 'field_changed' and not cfg['compare_fields']:
+            raise InvestigationError('field_changed export requires compare_fields')
         kinds.add(kind)
         if kind == "largest_changes":
             export.setdefault("limit", 100)

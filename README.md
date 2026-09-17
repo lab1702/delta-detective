@@ -203,6 +203,7 @@ each metric:
 | `removed` | Keys present only in the reference snapshot |
 | `changed` | Matched keys whose metric value changed; excludes category-only moves |
 | `moved` | Matched keys with any selected dimension or group column changed, including category-only moves |
+| `field_changed` | Matched keys with any configured `compare_fields` value changed, including zero metric contribution |
 | `largest_changes` | Nonzero row contributions across additions, removals, and matches |
 
 Focused exports include a signed `contribution` column. They sort by absolute
@@ -216,6 +217,66 @@ and so on. With multiple metrics, each filename starts with its zero-based metri
 index, such as `metric_0_removed_rows.csv`. `include_raw_rows: true` independently
 adds the full `raw_rows.csv` export (with the same prefix rule). The report and
 manifest list every exported file, metric, selection, limit, and row count.
+
+### Field-level change summaries
+
+Use `compare_fields` to track non-key attributes without treating them as metrics
+or grouping dimensions:
+
+```yaml
+compare_fields: [status, delivery_date, description]
+report:
+  evidence_exports:
+    - kind: field_changed
+      limit: 100
+```
+
+The export is optional. With only `compare_fields`, the report contains aggregate
+counts, never before/after field values. Fields independently selected as
+dimensions still have their usual category breakdowns.
+
+Comparisons cover matched keys only; added and removed records are excluded.
+Each field reports changed and unchanged counts, non-null-to-null (`became_null`),
+null-to-non-null (`from_null`), both-null, and non-null value changes. Text fields
+also count transitions to and from exactly empty text. Whitespace-only text is
+not blank. Null-to-empty counts as both `from_null` and `became_blank`; these
+measures can overlap. CSV empty fields are read as null under the existing loader,
+so typed Parquet is needed to preserve a distinct empty-string value.
+
+Numeric fields report increases/decreases; date/time fields use the same counters
+for later/earlier values. Direction counts exclude null transitions. Text and
+boolean fields have no direction counters. Equality is null-safe and compares
+stored values without trimming, case folding, or numeric tolerance, including for
+FLOAT/DOUBLE. Nonfinite floating-point comparison fields are rejected; nulls are
+allowed. Fields must exist with exactly matching types in both snapshots.
+Supported types are text, boolean, numeric, date, and time/timestamp types;
+nested values and other types are rejected. Keys cannot be compared fields.
+
+`field_changes` in findings and manifest JSON contains a matched-record overview
+and a `fields` list in configuration order. `changed_rows` in the overview counts
+each matched key once even if multiple fields changed. Per-field change percentages
+use all matched keys as the denominator and are undefined when there are none.
+Counts across fields overlap. The status `passed` means the counts were computed
+and checked, not that there were no changes. No fields yields `not_configured`;
+a schema-contract failure yields `not_evaluated`.
+
+This analysis runs once for the investigation, independently of the number of
+metrics. Replay SQL provides `main.field_overview` and `main.field_N`, where N is
+the zero-based field index. Raw `rfN`/`cfN` columns in the joined tables preserve
+the before/after values in `compare_fields` order.
+
+The opt-in `field_changed` export uses the existing focused-export conventions:
+one row per changed matched key per metric, sorted by absolute metric contribution
+then key, with an optional positive limit. Files are `field_changed_rows.csv` or
+`metric_0_field_changed_rows.csv`, etc. Configuring this export requires at least
+one compared field. All raw exports, including `include_raw_rows`, include the
+selected `rfN`/`cfN` columns when fields are configured. The manifest records their
+column order. CSV null/empty rendering has the same ambiguity as other raw exports;
+SQL replay retains typed evidence. Field changes do not trigger threshold rules
+or change exit codes by themselves.
+
+Add `compare_fields` to YAML after using `init`; the wizard does not select these
+fields yet. Only the current run's two snapshots are needed.
 
 ### Category movement tables
 
@@ -458,7 +519,7 @@ Tables rank by absolute contribution and retain signs. More than 50 categories
 produce an explicit Other remainder; actual null categories remain distinct from
 literal strings such as `(NULL)` and from the remainder.
 
-Only selected metric/dimension fields are compared. No claim that an entire row
+Only selected metrics, dimensions, and `compare_fields` are compared. No claim that an entire row
 is unchanged is made. An observed dataset difference is not necessarily an
 operational failure or a real-world change. Absent categories alone do not prove
 missing loads. The tool establishes differences and arithmetic contributions,

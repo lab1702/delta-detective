@@ -60,7 +60,7 @@ def load_and_validate(con, cfg, execute):
 
 def validate_loaded(con, cfg, profiles, execute):
     metrics = configured_metrics(cfg)
-    required = cfg["key"] + selected_dimensions(cfg) + [m["column"] for m in metrics if m["aggregate"] == "sum"]
+    required = cfg["key"] + selected_dimensions(cfg) + cfg.get('compare_fields', []) + [m["column"] for m in metrics if m["aggregate"] == "sum"]
     for side in ("reference", "current"):
         schema = profiles[side]["schema"]
         missing = set(required) - schema.keys()
@@ -92,4 +92,18 @@ def validate_loaded(con, cfg, profiles, execute):
                         "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT"}
         if typ not in scalar_types and not re.fullmatch(r"DECIMAL\(\d+,\d+\)", typ):
             raise InvestigationError(f"Dimension {col!r} must be categorical text, boolean, or exact numeric")
+    for col in cfg.get('compare_fields', []):
+        typ = profiles['reference']['schema'][col]
+        if not comparison_field_type(typ):
+            raise InvestigationError(f'Unsupported compare_fields type for {col!r}: {typ}; use text, boolean, numeric, date, or time values')
+        if typ in ('FLOAT', 'DOUBLE'):
+            for side in ('reference', 'current'):
+                execute(f"SELECT CASE WHEN EXISTS (SELECT 1 FROM {side} WHERE NOT isfinite({ident(col)})) THEN error('{side}: nonfinite comparison field') ELSE true END")
     return profiles
+
+
+def comparison_field_type(typ):
+    return typ in {'VARCHAR', 'BOOLEAN', 'TINYINT', 'SMALLINT', 'INTEGER', 'BIGINT', 'HUGEINT',
+                   'UTINYINT', 'USMALLINT', 'UINTEGER', 'UBIGINT', 'UHUGEINT', 'FLOAT', 'DOUBLE',
+                   'DATE', 'TIME', 'TIME WITH TIME ZONE', 'TIMESTAMP', 'TIMESTAMP_S', 'TIMESTAMP_MS',
+                   'TIMESTAMP_NS', 'TIMESTAMP WITH TIME ZONE'} or bool(re.fullmatch(r'DECIMAL\(\d+,\d+\)', typ))
