@@ -1,4 +1,5 @@
 import json
+import os
 
 import duckdb
 import pytest
@@ -125,6 +126,20 @@ def test_empty_directory_and_inconsistent_hive_columns(tmp_path):
     parquet(root / 'region=East' / 'one.parquet', [(1, 10)])
     parquet(root / 'two.parquet', [(2, 20)])
     with pytest.raises(InvestigationError, match='same Hive partition columns'):
+        load_config(cfg)
+
+
+@pytest.mark.skipif(not hasattr(os, 'mkfifo'), reason='Named pipes require os.mkfifo')
+@pytest.mark.parametrize('suffix', ['csv', 'parquet'])
+def test_directory_snapshot_rejects_named_pipes_before_loading(tmp_path, suffix):
+    cfg = setup(tmp_path, [], [])
+    root = tmp_path / 'snapshot'
+    parquet(root / 'valid.parquet', [(1, 10)])
+    os.mkfifo(root / f'pipe.{suffix}')
+    configure(cfg, reference='snapshot', dimensions=[])
+    # Configuration discovery must reject the pipe without opening it, so this
+    # regression also fails promptly on a version that accepts nonregular files.
+    with pytest.raises(InvestigationError, match='regular files'):
         load_config(cfg)
 
 

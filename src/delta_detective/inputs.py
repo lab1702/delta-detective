@@ -30,6 +30,8 @@ def snapshot_files(value):
                 continue
             if linked(path) or not path.resolve().is_relative_to(root.resolve()):
                 raise InvestigationError('Snapshot files must stay within the snapshot directory without links')
+            if not path.is_file():
+                raise InvestigationError('Snapshot CSV and Parquet entries must be regular files')
             if any(c in str(path) for c in '*?[]'):
                 raise InvestigationError('Snapshot file paths must not contain glob characters')
             partitions = {}
