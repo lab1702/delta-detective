@@ -56,6 +56,19 @@ def filter_predicate(filters, profiles):
             raise InvestigationError('Filter bounds require a numeric or DATE column')
         values = item['value'] if op == 'in' else [item['value']]
         rendered = [value_sql(v, typ, column) for v in values]
+        if typ not in ('FLOAT', 'DOUBLE') and (typ in NUMERIC or typ.startswith('DECIMAL(')):
+            # DuckDB's common DECIMAL type can shrink the available integer
+            # range when a bound has a finer scale. Compare scaled integers
+            # instead, preserving both large source values and exact bounds.
+            field_scale = int(typ.rstrip(')').split(',')[1]) if typ.startswith('DECIMAL(') else 0
+            bounds = [threshold_number(v) for v in values]
+            bound_scales = [max(0, -v.as_tuple().exponent) for v in bounds]
+            scale = max(field_scale, *bound_scales)
+            col = (f"CAST(replace(CAST({col} AS VARCHAR), '.', '') || "
+                   f"repeat('0', {scale - field_scale}) AS BIGNUM)")
+            rendered = [
+                f'CAST({literal(format(v, "f").replace(".", "") + "0" * (scale - bound_scale))} AS BIGNUM)'
+                for v, bound_scale in zip(bounds, bound_scales)]
         if op == 'in':
             predicates.append(f'{col} IN ({", ".join(rendered)})')
         else:

@@ -67,6 +67,59 @@ def test_numeric_bounds_do_not_round_to_column_scale(tmp_path, operator, value, 
     assert data['summary']['current_rows'] == expected
 
 
+@pytest.mark.parametrize('typ,values,operator,bound,expected_ids', [
+    ('DECIMAL(38,0)', ['-99999999999999999999999999999999999999', '1', '2',
+                       '99999999999999999999999999999999999999'], 'gt', '1.5', [2, 3]),
+    ('DECIMAL(38,0)', ['-99999999999999999999999999999999999999', '-2', '-1',
+                       '99999999999999999999999999999999999999'], 'lte', '-1.5', [0, 1]),
+    ('DECIMAL(38,0)', ['1', '2', '99999999999999999999999999999999999999'],
+     'in', ['1.5', '2.000'], [1]),
+    ('DECIMAL(38,18)', ['1', '1.000000000000000001', '99999999999999999999.999999999999999999'],
+     'gt', '1.0000000000000000001', [1, 2]),
+    ('DECIMAL(38,18)', ['1', '1.000000000000000001', '99999999999999999999.999999999999999999'],
+     'equals', '1.0000000000000000001', []),
+    ('DECIMAL(38,18)', ['1', '1.000000000000000001', '99999999999999999999.999999999999999999'],
+     'in', ['1', '1.0000000000000000001'], [0]),
+])
+def test_wide_decimal_filters_preserve_values_and_replay(tmp_path, typ, values, operator, bound, expected_ids):
+    from delta_detective.validation import validate
+
+    rows = [(i, 1, 'a', value) for i, value in enumerate(values)]
+    path = setup(tmp_path, rows, rows, schema=f'id INTEGER, amount INTEGER, category VARCHAR, score {typ}',
+                 filters=[filt('score', operator, bound)])
+    out = tmp_path / 'out'
+    data = investigate(path, out)
+    assert data['summary']['current_rows'] == len(expected_ids)
+    checked = validate(path, tmp_path / 'validation')
+    assert checked['status'] == 'passed'
+    assert checked['filter_scope']['inputs']['current']['included_rows'] == len(expected_ids)
+    with duckdb.connect() as con:
+        con.execute((out / 'analysis.sql').read_text())
+        for side in ('reference', 'current'):
+            assert con.execute(f'SELECT id FROM {side} ORDER BY id').fetchall() == [(i,) for i in expected_ids]
+
+
+@pytest.mark.parametrize('typ,minimum,maximum', [
+    ('HUGEINT', -(2**127), 2**127-1), ('UHUGEINT', 0, 2**128-1),
+])
+@pytest.mark.parametrize('operator,bound,expected_ids', [
+    ('equals', '1.5', []), ('gt', '1.5', [2, 3]), ('gte', '1.5', [2, 3]),
+    ('lt', '1.5', [0, 1]), ('lte', '1.5', [0, 1]), ('in', ['1.5', '2.000'], [2]),
+])
+def test_exact_integer_filter_extremes(typ, minimum, maximum, operator, bound, expected_ids):
+    from delta_detective.filtering import filter_predicate
+
+    # Keep integer types in DuckDB; Parquet may convert 128-bit integers.
+    profiles = {side: {'schema': {'score': typ}} for side in ('reference', 'current')}
+    predicate = filter_predicate([filt('score', operator, bound)], profiles)
+    with duckdb.connect() as con:
+        con.execute(f'CREATE TABLE source (id INTEGER, score {typ})')
+        con.executemany('INSERT INTO source VALUES (?, ?)',
+                        [(0, str(minimum)), (1, '1'), (2, '2'), (3, str(maximum)), (4, None)])
+        assert con.execute(f'SELECT id FROM source WHERE {predicate} ORDER BY id').fetchall() == [
+            (i,) for i in expected_ids]
+
+
 def test_dates_booleans_and_conditions(tmp_path):
     rows = [(1, 1, 'a', date(2025, 1, 1), True), (2, 2, 'a', date(2026, 1, 1), True),
             (3, 3, 'a', date(2026, 1, 1), False)]
